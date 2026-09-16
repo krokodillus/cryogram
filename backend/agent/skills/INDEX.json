@@ -1,0 +1,342 @@
+{
+  "skills_version": 1,
+  "min_app": "",
+  "skills": [
+    {
+      "id": "00-what-cryogram-is",
+      "group": "shared",
+      "tier": 1,
+      "kind": "policy",
+      "description": "What Cryogram is, the rules the product itself enforces, what you can reach on the user's computer, the claims you must never make, and how you spend a turn",
+      "depends_on": [],
+      "version": "4.3.0",
+      "last_updated": "2026-09-15",
+      "path": "shared/00-what-cryogram-is/SKILL.md"
+    },
+    {
+      "id": "01-how-you-write",
+      "group": "shared",
+      "tier": 1,
+      "kind": "policy",
+      "description": "Every sentence the user reads - plain words, no internal names or ids, which language to write in, what you never reveal, and how much to say",
+      "depends_on": [],
+      "version": "4.2.0",
+      "last_updated": "2026-09-10",
+      "path": "shared/01-how-you-write/SKILL.md"
+    },
+    {
+      "id": "02-a-message-arrives",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "What to do with each kind of message the user can send - an answer, feedback, a correction, a new requirement, a failed run, a changed value, a question, a new request, or chat - and how a change to a built workflow is worked without starting over",
+      "depends_on": [],
+      "version": "4.3.0",
+      "last_updated": "2026-09-14",
+      "path": "agent/02-a-message-arrives/SKILL.md"
+    },
+    {
+      "id": "03-starting-the-work",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "The first turn of a new workflow - announcing what you will do and saving the outline, collecting every value at the start, asking for credentials only through the masked question, and how to ask so the user is never asked twice",
+      "depends_on": [],
+      "version": "4.3.0",
+      "last_updated": "2026-09-15",
+      "path": "agent/03-starting-the-work/SKILL.md"
+    },
+    {
+      "id": "04-working-a-step",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "Doing each step for real as a cell on the real sample - what a cell may and may not do, probing without waste, leaving working code alone, opening a browser window, and testing a step that sends something for real",
+      "depends_on": [],
+      "version": "4.4.0",
+      "last_updated": "2026-09-15",
+      "path": "agent/04-working-a-step/SKILL.md"
+    },
+    {
+      "id": "05-what-you-learn",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "The two places a lesson is written down - a fact kept on this workflow, or a learning shared with every build - and when each is written",
+      "depends_on": [],
+      "version": "4.1.0",
+      "last_updated": "2026-09-06",
+      "path": "agent/05-what-you-learn/SKILL.md"
+    },
+    {
+      "id": "06-showing-and-building",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "Showing the result and taking feedback, what a later save of the plan carries and what it never repeats, and when and how the build happens",
+      "depends_on": [],
+      "version": "4.7.0",
+      "last_updated": "2026-09-16",
+      "path": "agent/06-showing-and-building/SKILL.md"
+    },
+    {
+      "id": "07-what-a-plan-contains",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "The plan the build reads - the workflow's summary and purpose, what each step declares, the order steps run in, how the work splits into steps, the checks, what may be empty, where each value lives, documents, and the design gaps to resolve before building",
+      "depends_on": [],
+      "version": "4.4.0",
+      "last_updated": "2026-09-15",
+      "path": "agent/07-what-a-plan-contains/SKILL.md"
+    },
+    {
+      "id": "08-when-a-run-failed",
+      "group": "agent",
+      "tier": 2,
+      "kind": "policy",
+      "description": "What to say when a run has failed or something is in the way, how a repair is agreed and built, and the one glance at earlier runs a turn takes when the workflow has history",
+      "depends_on": [],
+      "version": "4.4.0",
+      "last_updated": "2026-09-16",
+      "path": "agent/08-when-a-run-failed/SKILL.md"
+    },
+    {
+      "id": "25-recordings",
+      "group": "agent",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN an undocumented external system must become scriptable - capture its traffic (an app-recorded HAR/demonstration, or an uploaded HAR) and derive the call contract from the recording sample",
+      "depends_on": [],
+      "version": "2.0.0",
+      "last_updated": "2026-09-06",
+      "path": "agent/25-recordings/SKILL.md"
+    },
+    {
+      "id": "40-corpus-and-verdicts",
+      "group": "agent",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN diagnosing a failed run or designing a change to a built workflow - what the corpus records, how to diagnose the class of a failure, and how to design against stored cases without running the saved process",
+      "depends_on": [],
+      "version": "2.0.0",
+      "last_updated": "2026-09-06",
+      "path": "agent/40-corpus-and-verdicts/SKILL.md"
+    },
+    {
+      "id": "61-connector-practice",
+      "group": "agent",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN designing or fixing a CONNECTOR step (anything that reaches an outside system - send, post, fetch, write) - what to include, how to structure it, what to test",
+      "depends_on": [
+        "07-what-a-plan-contains"
+      ],
+      "version": "2.2.0",
+      "last_updated": "2026-09-16",
+      "path": "agent/61-connector-practice/SKILL.md"
+    },
+    {
+      "id": "62-ai-practice",
+      "group": "agent",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN designing or fixing an AI step (per-run judgement - summarise, classify, extract, draft) - what to include, how to structure it, what to test, how to tune",
+      "depends_on": [
+        "07-what-a-plan-contains"
+      ],
+      "version": "2.2.0",
+      "last_updated": "2026-09-10",
+      "path": "agent/62-ai-practice/SKILL.md"
+    },
+    {
+      "id": "63-code-practice",
+      "group": "agent",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN designing or fixing a CODE step (deterministic work - parse, transform, compute, file) - the pure-step shape, what to include, what to test",
+      "depends_on": [
+        "07-what-a-plan-contains"
+      ],
+      "version": "2.1.0",
+      "last_updated": "2026-09-14",
+      "path": "agent/63-code-practice/SKILL.md"
+    },
+    {
+      "id": "airtable",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read or write records in Airtable - the personal-access-token route, exact user setup steps, the request pattern, batching and known gotchas",
+      "depends_on": [],
+      "version": "1.1.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/airtable/SKILL.md"
+    },
+    {
+      "id": "browser",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs data from a website that blocks automated requests (a 403 or bot check on a plain fetch) or has no usable API - Reddit always, go straight here - drive the user's real Chrome with Playwright",
+      "depends_on": [],
+      "version": "2.8.0",
+      "last_updated": "2026-09-15",
+      "path": "connectors/browser/SKILL.md"
+    },
+    {
+      "id": "browser-login",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a browser step needs a signed-in session - first sign-in, an expired session, a captcha or verification page - how the app keeps the session, how the step tells whether the person is signed in, confirm_with_user, the sign-in step and the single sign-on warning",
+      "depends_on": [],
+      "version": "4.0.0",
+      "last_updated": "2026-09-13",
+      "path": "connectors/browser-login/SKILL.md"
+    },
+    {
+      "id": "database",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read or write rows in a SQL database the user already has (Postgres, MySQL, SQLite; Supabase/Neon/RDS/PlanetScale) - driver vs REST routes, connection-string handling, transient-vs-config errors",
+      "depends_on": [],
+      "version": "1.2.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/database/SKILL.md"
+    },
+    {
+      "id": "email-inbox",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read incoming email (poll a mailbox, fetch new messages/attachments) - Gmail IMAP app-password route, Outlook bridge reality, the new-since-last-run pattern",
+      "depends_on": [],
+      "version": "1.1.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/email-inbox/SKILL.md"
+    },
+    {
+      "id": "excel-onedrive",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to add rows to or read data from an Excel file stored in OneDrive/SharePoint - the Power Automate bridge for writes, the named-table requirement, date handling, and share-link reads",
+      "depends_on": [],
+      "version": "1.2.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/excel-onedrive/SKILL.md"
+    },
+    {
+      "id": "gmail",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to send email from a Gmail address - the app-password route (locked in), exact click-through setup, the send pattern, and the company-IT fallback",
+      "depends_on": [],
+      "version": "1.2.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/gmail/SKILL.md"
+    },
+    {
+      "id": "google-calendar",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read events from or create events in Google Calendar - the secret iCal read route, service-account routes, the attendee limitation, gotchas",
+      "depends_on": [],
+      "version": "1.2.0",
+      "last_updated": "2026-09-10",
+      "path": "connectors/google-calendar/SKILL.md"
+    },
+    {
+      "id": "google-drive",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read files from or write files to Google Drive - share-link and service-account reads, the Apps Script write bridge (service-account writes are dead), gotchas",
+      "depends_on": [],
+      "version": "1.4.0",
+      "last_updated": "2026-09-10",
+      "path": "connectors/google-drive/SKILL.md"
+    },
+    {
+      "id": "google-sheets",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read from or write to a Google Sheet - the proven connection routes, the exact user setup steps and the known gotchas, so you never rediscover them live",
+      "depends_on": [],
+      "version": "1.6.0",
+      "last_updated": "2026-09-10",
+      "path": "connectors/google-sheets/SKILL.md"
+    },
+    {
+      "id": "microsoft-teams",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to post a message to Microsoft Teams (channel, group chat, or direct to a person) - the Workflows-webhook route (locked in), the use-case fork, sender attribution facts, click-through setup, and the company-IT fallback",
+      "depends_on": [],
+      "version": "1.8.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/microsoft-teams/SKILL.md"
+    },
+    {
+      "id": "notion",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read or write rows in a Notion database - the internal-integration route, the connect-the-page step everyone forgets, exact property shapes and known gotchas",
+      "depends_on": [],
+      "version": "1.2.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/notion/SKILL.md"
+    },
+    {
+      "id": "onedrive",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to read a file from or save a file into OneDrive (personal or work/school) - the no-admin routes, the Power Automate bridge for writes, share-link reads, and the gotchas",
+      "depends_on": [],
+      "version": "1.1.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/onedrive/SKILL.md"
+    },
+    {
+      "id": "outlook-email",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to send email from an Outlook / Microsoft 365 address - the one question that decides the route (personal vs work account), the basic-auth retirement, the bridge-flow route, and the company-IT fallback",
+      "depends_on": [],
+      "version": "1.4.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/outlook-email/SKILL.md"
+    },
+    {
+      "id": "slack",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to post a message to Slack - the incoming-webhook route, exact user setup steps, the resilient post pattern and known gotchas",
+      "depends_on": [],
+      "version": "1.3.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/slack/SKILL.md"
+    },
+    {
+      "id": "webhook",
+      "group": "connectors",
+      "tier": 2,
+      "kind": "action",
+      "description": "WHEN a workflow step needs to call a generic webhook or plain HTTP API endpoint the user provides - the resilient request pattern, verification and gotchas",
+      "depends_on": [],
+      "version": "1.1.0",
+      "last_updated": "2026-09-06",
+      "path": "connectors/webhook/SKILL.md"
+    }
+  ]
+}

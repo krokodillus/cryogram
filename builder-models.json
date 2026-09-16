@@ -1,0 +1,11 @@
+{
+  "_": "The models the Builder AI tab offers per engine family and the one ticked on a fresh install. The install script fetches this file from the repository's main branch, so a new install gets the current list without a release; with no model ticked the Builder Agent runs the program's own default model.",
+  "anthropic": {
+    "default": "claude-sonnet-5",
+    "models": ["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-opus-5"]
+  },
+  "codex": {
+    "default": "gpt-5.6-terra",
+    "models": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
+  }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "id": "build-a-workflow",
+    "title": "Build a workflow",
+    "file": "build-a-workflow.md"
+  },
+  {
+    "id": "run-a-workflow",
+    "title": "Run it",
+    "file": "run-a-workflow.md"
+  },
+  {
+    "id": "set-values-and-share-them",
+    "title": "Set variables and reuse them",
+    "file": "set-values-and-share-them.md"
+  },
+  {
+    "id": "use-files-and-websites",
+    "title": "Work with files and websites",
+    "file": "use-files-and-websites.md"
+  },
+  {
+    "id": "external-tools",
+    "title": "Connect to external tools and third-party apps",
+    "file": "external-tools.md"
+  },
+  {
+    "id": "change-a-workflow",
+    "title": "Change or fix it",
+    "file": "change-a-workflow.md"
+  },
+  {
+    "id": "connect-your-ai",
+    "title": "Choose your AI",
+    "file": "connect-your-ai.md"
+  },
+  {
+    "id": "get-help",
+    "title": "Find instructions and get help",
+    "file": "get-help.md"
+  }
+]
