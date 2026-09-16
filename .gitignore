@@ -1,0 +1,8 @@
+# The app's own environment and the private Python the launcher can
+# download - local copies, not source.
+.venv/
+/python/
+python.tar.gz
+__pycache__/
+*.pyc
+.DS_Store

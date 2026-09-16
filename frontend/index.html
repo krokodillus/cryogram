@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="cryogram-token" content="__CRYOGRAM_LOCAL_TOKEN__" />
+  <title>Cryogram</title>
+  <script src="js/theme.js"></script>
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+</head>
+<body class="shell">
+  <aside class="sidenav">
+    <a class="brand" href="#/"><img class="brand-mark" src="favicon-32.png" alt="" width="24" height="24"><span class="brand-word">Cryogram</span> <span class="brand-sub" id="appVersion"></span></a>
+    <nav class="sidenav-items">
+      <a href="#/" data-nav="workflows">
+        <span class="nav-ico">&#9638;</span> <span class="nav-label">Workflows</span>
+        <span id="navWorkflowsAlert" class="alert-dot hidden"
+          title="Something new since you last looked">!</span></a>
+      <a href="#/environments" data-nav="environments">
+        <span class="nav-ico">&#9679;</span> <span class="nav-label">Environments</span></a>
+      <a href="#/knowledge" data-nav="knowledge">
+        <span class="nav-ico">&#9776;</span> <span class="nav-label">Knowledge</span></a>
+      <a href="#/admin" data-nav="admin">
+        <span class="nav-ico">&#9881;</span> <span class="nav-label">Admin</span></a>
+    </nav>
+    <div class="sidenav-foot">
+      <a class="theme-toggle" href="https://cryogram.app/support"
+        target="_blank" rel="noopener"
+        title="Something broken or confusing? Tell us - it goes straight to the people building Cryogram">
+        <span class="nav-ico">&#63;</span>
+        <span class="nav-label">Help &amp; feedback</span>
+      </a>
+      <button id="onboardingOpen" class="theme-toggle" type="button"
+        title="A short guided setup: the Builder Agent and your workflow AI providers">
+        <span class="nav-ico">&#9873;</span>
+        <span class="nav-label">Onboarding</span>
+      </button>
+      <button id="themeToggle" class="theme-toggle" type="button"
+        title="Switch between light and dark mode">
+        <span class="nav-ico" id="themeToggleIco">&#9790;</span>
+        <span id="themeToggleLabel" class="nav-label">Dark mode</span>
+      </button>
+      <button id="quitApp" class="theme-toggle" type="button"
+        title="Stop Cryogram on this computer">
+        <span class="nav-ico">&#x23FB;</span>
+        <span class="nav-label">Quit</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main-col">
+
+    <section id="view-dashboard" class="view hidden">
+      <div class="page-head">
+        <div class="page-head-row">
+          <h1>Workflows</h1>
+          <div class="head-actions">
+            <button id="importWorkflow" class="btn btn-secondary"
+              title="Bring in a workflow shared by Cryogram">Import</button>
+            <button id="selectMode" class="btn btn-secondary">Select</button>
+            <button id="newWorkflow" class="btn btn-primary">+ New workflow</button>
+          </div>
+        </div>
+        <p class="page-sub">Every workflow you own. Click a card to open it.</p>
+      </div>
+      <div id="dashboardCards" class="page-body"></div>
+    </section>
+
+    <section id="view-environments" class="view hidden">
+      <div class="page-head">
+        <div class="page-head-row">
+          <h1>Environments</h1>
+          <div class="head-actions">
+            <button id="selectEnvMode" class="btn btn-secondary">Select</button>
+            <button id="newEnvironment" class="btn btn-primary">+ New environment</button>
+          </div>
+        </div>
+        <p class="page-sub">Reusable sets of values shared across workflows.
+          Edited here, read-only inside a workflow.</p>
+      </div>
+      <div id="environmentCards" class="page-body"></div>
+    </section>
+
+    <section id="view-envDetail" class="view hidden">
+      <div id="envDetail" class="page-body"></div>
+    </section>
+
+    <section id="view-knowledge" class="view hidden">
+      <div class="page-head">
+        <div class="page-head-row"><h1>Knowledge</h1></div>
+      </div>
+      <div class="page-body knowledge-layout">
+        <nav id="knowledgeTopics" class="knowledge-topics"></nav>
+        <article id="knowledgeBody" class="knowledge-body"></article>
+      </div>
+    </section>
+
+    <section id="view-admin" class="view hidden">
+      <div class="page-head">
+        <div class="page-head-row"><h1>Admin</h1>
+          <div class="head-actions" id="adminActions"></div></div>
+        <p class="page-sub">Providers, models, and how Cryogram runs on your machine.</p>
+      </div>
+      <nav class="tab-bar admin-tabs" id="adminTabs">
+        <button class="tab active" data-tab="builder" type="button">Builder Agent</button>
+        <button class="tab" data-tab="workflow" type="button">Workflow AI providers</button>
+        <button class="tab" data-tab="learnings" type="button">Learnings</button>
+        <button class="tab" data-tab="preferences" type="button">Preferences</button>
+      </nav>
+      <div class="page-body">
+        <div id="builderPane" class="tab-pane">Loading&hellip;</div>
+        <div id="providersPane" class="tab-pane hidden"></div>
+        <div id="learningsPane" class="tab-pane hidden"></div>
+        <div id="preferencesPane" class="tab-pane hidden"></div>
+      </div>
+    </section>
+
+    <section id="view-adminProvider" class="view hidden">
+      <div id="adminProviderDetail" class="page-body"></div>
+    </section>
+
+    <section id="view-workflow" class="view hidden">
+      <div class="page-head workflow-head">
+        <div class="page-head-row">
+          <h1 id="workflowName">-</h1>
+          <div class="head-actions">
+            <div id="workflowActions" class="head-tabs-slot"></div>
+            <div class="workflow-env" id="workflowEnv"></div>
+            <span class="actions-divider" aria-hidden="true"></span>
+            <button id="projCopy" class="btn btn-secondary" type="button"
+              title="Make an independent copy of this workflow">Copy</button>
+            <button id="projDelete" class="btn btn-danger" type="button"
+              title="Delete this workflow">Delete</button>
+          </div>
+        </div>
+        <p class="page-sub" id="workflowDesc"></p>
+      </div>
+
+      <nav class="workflow-tabs tab-bar" id="workflowTabs">
+        <button class="tab active" data-ptab="workflow" type="button">Workflow</button>
+        <button class="tab" data-ptab="variables" type="button">Inputs</button>
+        <button class="tab" data-ptab="results" type="button">Run history</button>
+        <button class="tab" data-ptab="issues" type="button">Issues</button>
+        <button class="tab" data-ptab="purpose" type="button">Information</button>
+        <button id="wfPanelToggle" class="btn btn-secondary btn-sm tab-bar-toggle" type="button">Hide chat</button>
+      </nav>
+
+      <main class="layout wf-layout workflow-tab" id="ptab-workflow">
+        <section class="pane workflow-pane">
+          <div class="pane-title">Workflow
+            <span class="legend">
+              <i class="dot code"></i>Code <i class="dot connector"></i>Connector <i class="dot browser"></i>Browser <i class="dot ai"></i>AI <i class="dot input"></i>User input
+
+            </span>
+            <span class="pane-title-actions">
+              <button id="stopWorkflow" class="btn btn-secondary btn-sm" title="Stop the current run" disabled>Stop</button>
+              <button id="runWorkflow" class="btn btn-primary btn-sm" title="Run this workflow">&#9654; Run</button>
+            </span>
+          </div>
+          <div id="setupNotice" class="setup-notice" hidden></div>
+          <div id="runWaitBanner" class="run-wait" role="button" tabindex="0" hidden></div>
+          <div id="workflow" class="workflow">
+            <div id="wfWorking" class="wf-working" hidden aria-live="polite" role="status"><span class="wf-working-dot"></span><span id="wfWorkingText">Working on your workflow…</span></div>
+          </div>
+          <div class="wf-zoom-controls">
+            <button id="wfZoomOut" class="btn btn-secondary wf-zoom-btn" type="button" title="Zoom out">&minus;</button>
+            <button id="wfResetView" class="btn btn-secondary btn-sm" title="Reset pan and zoom">Reset view</button>
+            <button id="wfZoomIn" class="btn btn-secondary wf-zoom-btn" type="button" title="Zoom in">+</button>
+          </div>
+        </section>
+
+        <div id="wfSidePanel" class="wf-side-panel">
+          <section class="pane chat-pane">
+            <div class="pane-title">Chat <span id="chatModel" class="chat-model"></span></div>
+            <div id="chatMessages" class="chat-messages"></div>
+            <div id="chatStatus" class="chat-status" hidden
+                 aria-live="polite" role="status">
+              <div id="chatStatusText"></div>
+            </div>
+            <div id="chatStage" class="chat-stage" hidden></div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatInput" rows="1" placeholder="Describe a change or a new step..." autocomplete="off"></textarea>
+              <input id="chatFile" type="file" multiple hidden />
+              <div class="chat-form-side">
+                <div class="send-stack">
+                  <button type="button" id="chatAttach" class="btn btn-secondary"
+                    title="Attach a file - it is sent with your next message"
+                    aria-label="Attach a file"><svg class="ico-clip"
+                      width="18" height="18" viewBox="0 0 950 950"
+                      fill="currentColor" aria-hidden="true"><path
+                      d="M857.7,141.3c-30.1-30.1-65.1-53.5-104.3-69.4c-37.8-15.3-77.7-23.2-118.7-23.2c-40.9,0-80.9,7.7-118.7,22.9c-39.1,15.8-74.2,38.9-104.3,68.8L73.1,478.3C49.3,501.9,30.9,529.4,18.3,560.2C6.2,589.9,0,621.3,0,653.6C0,685.7,6.1,717,18.1,746.7c12.4,30.7,30.7,58.2,54.3,81.899c23.6,23.7,51.2,42,81.9,54.5c29.7,12.101,61.1,18.2,93.3,18.2c32.2,0,63.6-6.1,93.3-18.1c30.8-12.5,58.399-30.8,82.1-54.4l269.101-268c17.3-17.2,30.6-37.3,39.699-59.7c8.801-21.6,13.2-44.5,13.2-67.899c0-48.2-18.8-93.2-52.899-127c-34-34.2-79.2-53.1-127.301-53.3c-48.199-0.1-93.5,18.6-127.6,52.7L269.6,473.3c-8.5,8.5-13.1,19.7-13.1,31.601c0,11.899,4.6,23.199,13.1,31.6l0.7,0.7c17.4,17.5,45.8,17.5,63.3,0.1l168-167.5c35.1-34.8,92.1-35,127.199-0.399c16.9,16.8,26.101,39.3,26.101,63.399c0,24.3-9.4,47.101-26.5,64.101l-269,268c-0.5,0.5-0.9,0.899-1.2,1.5c-29.7,28.899-68.9,44.699-110.5,44.5c-41.9-0.2-81.2-16.5-110.6-46c-14.7-15-26.1-32.5-34-52C95.5,694,91.7,674,91.7,653.6c0-41.8,16.1-80.899,45.4-110.3c0.4-0.3,0.7-0.6,1.1-0.899l337.9-337.8c0.3-0.3,0.6-0.7,0.899-1.1c21.4-21,46.3-37.4,74-48.5c27-10.8,55.4-16.2,84.601-16.2c29.199,0,57.699,5.6,84.6,16.4c27.9,11.3,52.9,27.8,74.3,49.1c21.4,21.4,37.9,46.4,49.2,74.3c10.9,26.9,16.4,55.4,16.4,84.6c0,29.3-5.5,57.9-16.5,85c-11.301,28-28,53.2-49.5,74.8l-233.5,232.8c-8.5,8.5-13.2,19.7-13.2,31.7s4.7,23.2,13.1,31.6l0.5,0.5c17.4,17.4,45.8,17.4,63.2,0L857.5,586.9C887.601,556.8,911,521.7,926.9,482.6C942.3,444.8,950,404.9,950,363.9c0-40.9-7.8-80.8-23.1-118.5C911.101,206.3,887.8,171.3,857.7,141.3z"/></svg></button>
+                  <button type="submit" class="btn btn-primary">Send</button>
+                </div>
+                <button type="button" id="chatStop"
+                  class="btn btn-danger chat-stop-tall"
+                  title="Stop the current work" aria-label="Stop"
+                  disabled>&#9632;</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </main>
+
+      <main class="layout workflow-tab hidden" id="ptab-variables">
+        <section class="pane vars-pane">
+          <div class="pane-title">Inputs</div>
+          <div id="variablesList" class="vars-list"></div>
+        </section>
+      </main>
+
+      <main class="layout workflow-tab hidden" id="ptab-results">
+        <section class="pane vars-pane">
+          <div class="pane-title">Run history</div>
+          <div id="resultsPane" class="vars-list"></div>
+        </section>
+      </main>
+
+      <main class="layout workflow-tab hidden" id="ptab-issues">
+        <section class="pane vars-pane">
+          <div class="pane-title">Issues</div>
+          <div id="issuesList" class="vars-list"></div>
+        </section>
+      </main>
+
+      <main class="layout workflow-tab hidden" id="ptab-purpose">
+        <section class="pane vars-pane">
+          <div class="pane-title">Purpose</div>
+          <div id="purposePane" class="vars-list"></div>
+        </section>
+        <section class="pane vars-pane">
+          <div class="pane-title">Instructions</div>
+          <div id="instructionsPane" class="vars-list"></div>
+        </section>
+        <section class="pane vars-pane">
+          <div class="pane-title">Build materials</div>
+          <div id="samplesList" class="vars-list"></div>
+        </section>
+        <section class="pane vars-pane">
+          <div class="pane-title">Learnings from this workflow</div>
+          <div id="workflowSkillsList" class="vars-list"></div>
+        </section>
+        <section class="pane vars-pane">
+          <div class="pane-title">Version history</div>
+          <div id="versionsPane" class="vars-list"></div>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <aside id="nodeDetail" class="drawer hidden"></aside>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

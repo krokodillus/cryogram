@@ -1,0 +1,16 @@
+name: Close pull requests
+on:
+  pull_request_target:
+    types: [opened, reopened]
+permissions:
+  pull-requests: write
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr close "$NUMBER" --repo "$REPO" --comment "$NOTE"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          NOTE: "Cryogram doesn't take pull requests, so this one is closed automatically. If you've found a problem or want something changed, please open an issue instead, and we read every one."
