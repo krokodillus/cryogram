@@ -81,7 +81,7 @@ def execute(token: str, name: str, args: dict) -> dict:
         b = (e["outcome"].get("tool_bytes") or {}).get(name) or (0, 0)
         _log(workflow, "tool-result",
              {"tool": name, "ok": bool(env.get("ok")),
-              "error": str(env.get("error") or "")[:300],
+              "error": str(env.get("error") or ""),
               "seconds": round(time.time() - t0, 1), "engine": "codex",
               "chars_in": e["outcome"].get("last_chars_in", 0),
               "chars_out": e["outcome"].get("last_chars_out", 0),

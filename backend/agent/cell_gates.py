@@ -18,7 +18,8 @@ class CellCall:
         from agent import cells
         self.workflow = workflow
         self.raw_name = name
-        self.name = steps.humanise_name(name) if str(name or "").strip() else ""
+
+        self.name = steps.step_name_for(workflow, name) if str(name or "").strip() else ""
         self.code = code or ""
         self.inputs = dict(inputs or {})
         from agent import gate as _g
@@ -40,6 +41,18 @@ class CellCall:
         self.url = str(url or "").strip() or str((self.plan_step or {}).get("url") or "").strip()
         self.prior = cells.latest_ok(workflow["id"], self.name, kind="code",
                                      step_id=self.step_id) if self.name else None
+
+        self.code_from_step = False
+
+        self.notes: list = []
+        if not self.code.strip() and self.step is not None:
+            self.code = (str((self.plan_step or {}).get("code") or "").strip()
+                         or str((self.prior or {}).get("code") or "").strip()
+                         or str(((self.step.get("config") or {}).get("code")) or "").strip())
+            self.code_from_step = bool(self.code)
+            if self.code_from_step:
+                self.notes.append(f'no code was sent, so this ran "{self.name}"\'s own '
+                                  "code with the inputs given")
         self.prior_out = (self.prior or {}).get("output")
         self.retrievable = not (isinstance(self.prior_out, dict)
                                 and "$missing_evidence" in self.prior_out)
@@ -47,7 +60,10 @@ class CellCall:
 
         self.is_browser = (step_types.may((self.plan_step or {}).get("type"), "browser")
                            if self.plan_step else bool(browser))
-        self.packages = _g.required_packages(code or "", self._declared_packages,
+        if self.code_from_step and not self._declared_packages:
+            self._declared_packages = [str(p) for p in ((self.plan_step or {}).get("packages")
+                                                       or (self.prior or {}).get("packages") or [])]
+        self.packages = _g.required_packages(self.code, self._declared_packages,
                                              is_browser=self.is_browser)
         ps = self.plan_step or {}
 
@@ -63,7 +79,10 @@ def gate_door(c: CellCall) -> Optional[dict]:
     if not c.name:
         return {"error": "name the cell like the step it will become"}
     if not c.code.strip():
-        return {"error": "a cell needs code"}
+        if c.step is not None:
+            return {"error": f'"{c.name}" has no code to run again yet: no try of it was '
+                             "accepted and the plan carries no code for it - send its code"}
+        return {"error": "a cell needs code; leave code out only to run a step's own code again, naming the step by its name or id"}
     note = steps.skeleton_first(c.workflow)
     if note:
         return {"error": note}
@@ -96,21 +115,16 @@ def gate_typed_ports(c: CellCall) -> Optional[dict]:
 
 def gate_fixtures(c: CellCall) -> Optional[dict]:
     from agent import cells
-    samples = {s.get("name"): s.get("ref") for s in steps.fresh_samples(c.workflow)}
+    from agent import input_refs
     recorded = cells.latest_outputs(c.workflow["id"])
-    fixed: dict = {}
-    for k, v in c.inputs.items():
+    fixed, error = input_refs.resolve(c.workflow, c.inputs, recorded)
+    if error:
+        return {"error": error}
+    for k, v in fixed.items():
         if isinstance(v, str):
-            if v.startswith((steps.RECORDED_PREFIX, steps.ISSUE_PREFIX)):
-                v, err = steps.resolve_recorded(k, v, recorded, steps.issue_case_inputs(c.workflow))
-                if err:
-                    return {"error": err}
-            elif v in samples:
-                v = samples[v]
-            elif "/blobs/" in v or str(config.DATA_DIR) in v:
+            if "/blobs/" in v or str(config.DATA_DIR) in v:
                 return {"error": f"input {k!r} is a raw file path - pass the "
                                  "sample's name or blob ref from list_samples (or \"$recorded\" to chain from an earlier cell); a cell must run exactly the way a real run will"}
-        fixed[k] = v
     c.inputs = fixed
 
     if steps.seed_file_kinds(c.workflow, c.name, fixed):
@@ -138,6 +152,9 @@ def gate_replay(c: CellCall) -> Optional[dict]:
     if not (c.prior and not c.fresh and c.retrievable
             and c.code_key(c.prior.get("code")) == c.code_key()):
         return None
+
+    if c.code_from_step and c.prior.get("inputs") != c.inputs:
+        return None
     same_inputs = c.prior.get("inputs") == c.inputs
     return {"ok": True, "cell": c.name, "output": c.prior_out,
             "duplicate": True,
@@ -154,10 +171,15 @@ def gate_probe_shadow(c: CellCall) -> Optional[dict]:
               if isinstance(p, dict) and p.get("name")}
     written, dynamic = _gate.write_output_names(c.code)
     if known and written and not dynamic and not (written & known):
-        return {"error": f'this cell carries the step name "{c.name}" but '
-                         "writes none of that step's outputs ("
-                         + ", ".join(sorted(known))
-                         + ") - recorded under the step's name it would REPLACE the step's real evidence. A diagnostic or probe takes its OWN plain name (\"check ...\"); the step's cell writes the step's outputs."}
+        step_name = c.name
+        c.name = f"Probe of {step_name}"
+        c.plan_step = c.step = None
+        c.step_id = None
+        c.prior, c.prior_out, c.repeat = None, None, False
+        c.is_write_conn = c.is_read_conn = False
+        c.notes.append(f'this try wrote none of "{step_name}"\'s outputs ('
+                       + ", ".join(sorted(known)) + f'), so it ran as a probe named "{c.name}" '
+                       "and the step's own recorded try is unchanged")
     return None
 
 def gate_decline(c: CellCall) -> Optional[dict]:
@@ -177,7 +199,11 @@ def gate_proposal_first(c: CellCall) -> Optional[dict]:
         return None
 
     why = steps.change_scope_refusal(c.workflow, c.name)
-    return {"error": why} if why else None
+    if not why:
+        return None
+
+    return {"error": why, **({"widen_change": c.name}
+                            if steps.outside_change_scope(c.workflow, c.name) else {})}
 
 _LAUNCH = re.compile(r"launch_persistent_context\(|chromium\.launch\(")
 
@@ -205,7 +231,9 @@ def gate_browser_card(c: CellCall) -> Optional[dict]:
     return {"error": "opening the real browser needs the user's go-ahead. Never rename the cell to get past this: renames orphan the step's recorded evidence.",
             "needs_browser_ok": c.name,
             **({"domain": site} if site else {}),
-            **({"sends": True} if c.step and step_types.writes_outside(c.step) else {})}
+            **({"sends": True} if c.step and step_types.writes_outside(c.step) else {}),
+
+            **({"needs_person": True} if _gate.asks_person(c.code) else {})}
 
 # The site a window opens, as the card names it
 def _site_of(url: str) -> str:
@@ -228,6 +256,9 @@ def gate_send_card(c: CellCall) -> Optional[dict]:
 
 def gate_read_connector(c: CellCall) -> Optional[dict]:
     if not (c.is_read_conn and c.repeat and not c.fresh and not c.missing):
+        return None
+
+    if steps.in_approved_change(c.workflow, c.name):
         return None
     from agent import cells
     mine = next((e for e in cells.inventory(c.workflow["id"]) if e.get("name") == c.name), None)
@@ -255,14 +286,33 @@ def gate_code_check(c: CellCall) -> Optional[dict]:
         return {"error": "the code cannot run as written: " + "; ".join(problems)
                          + " - fix it and run the cell again"}
     problems = list(_gate.check_undefined_names(c.code))
+    import ast
+    from runtime import contracts
+    problems += contracts.check_calls(ast.parse(c.code))
     if problems:
-        problems.append("the cell surface is read_input / write_output / get_secret / write_file / heartbeat / checkpoint / checkpoints / mark_sent / unexpected_input, in a browser cell `page` with browser_goto / confirm_with_user, plus plain Python; a recorded value is read with read_input after chaining it as \"$recorded:<name>\" in inputs")
-    roots = _gate.import_roots(c.code)
+        problems.append("the cell surface is read_input / write_output / get_secret / write_file / heartbeat / checkpoint / checkpoints / checkpoint_values / mark_sent / unexpected_input, in a browser cell `page` with browser_goto / confirm_with_user, plus plain Python; a recorded value is read with read_input after chaining it as \"$recorded:<name>\" in inputs")
+
+    if c.plan_step:
+        declared = {str(p.get("name")) for p in c.plan_step.get("inputs") or []}
+        passed = set((c.inputs or {}).keys()) if isinstance(c.inputs, dict) else set()
+        for n in sorted(_gate.read_input_names(c.code) - declared - passed):
+            if n.startswith(("$recorded", "$issue")):
+                from runtime import capability as _cap
+                problems.append(_cap.recorded_ref_sentence(n))
+                continue
+            problems.append(f"the code reads {n!r}, which is not one of this step's "
+                            "declared inputs, so it has no value here - add it to the step's inputs in the plan (a value the workflow keeps between runs is then a setting)")
+
+    if c.plan_step and step_types.reaches_outside(c.plan_step):
+        problems += _gate.check_silent_loop(c.code)
+    roots = sorted(set(_gate.import_roots(c.code)) | set(_gate.implied_roots(c.code)))
     if roots:
         for m in deps.missing_modules(c.workflow["id"], roots,
                                       app_packages=c.is_browser):
             hint = _gate.PACKAGE_FOR_IMPORT.get(m, m)
-            problems.append(f"`{m}` is imported but neither declared in `packages` "
+            what = (f"`{m}` is imported" if m in _gate.import_roots(c.code)
+                    else f"`{m}` is needed by a module the code imports")
+            problems.append(f"{what} but neither declared in `packages` "
                             "nor installed in this workflow's environment - add "
                             f"{hint!r} to packages")
     if problems:
@@ -290,17 +340,60 @@ CELL_GATES: list[Callable[[CellCall], Optional[dict]]] = [
 ]
 
 # While a browser cell is running, what it needs the person to do reaches them as a card
-def _window_request(workflow: dict):
+def _window_request(workflow: dict, name: str):
     from agent import actions
+    step = steps.humanise_name(str(name or ""))
     def ask(message: str) -> str:
         decision = actions._approve(
             workflow, lambda ev: None, "Something for you to do",
             str(message or "The step is waiting for you in the browser window."),
-            "The window stays open while you do it - it carries on the moment you confirm.")
+            "The window stays open while you do it - it carries on the moment you confirm.", step=step, holds="person")
         if decision in ("allow", "always"):
             return "answered"
         return "unanswered" if decision is None else "stopped"
     return ask
+
+# The fix for a list output given checkpoints()' record, when the code reads checkpoints()
+def _checkpoints_hint(ports: list, out, code: str) -> str:
+    import ast
+    lists = [p.get("name") for p in ports
+             if p.get("type") == "list" and isinstance((out or {}).get(p.get("name")), dict)]
+    if not lists:
+        return ""
+    try:
+        calls = {n.func.id for n in ast.walk(ast.parse(code or ""))
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    except SyntaxError:
+        return ""
+    if "checkpoints" not in calls:
+        return ""
+    names = ", ".join(f'"{n}"' for n in lists)
+    return (f"{names} is declared as a list and received a record; checkpoints() "
+            "returns a record keyed by item, for skipping what is done. Publish checkpoint_values(keys), the recorded results for the current input's item keys as a list in their order")
+
+# On a later window, the request index lists only what the previous window did not
+def _only_new_requests(workflow_id: str, num: int, result: dict) -> None:
+    if num < 2:
+        return
+    from agent import cells
+    out = result.get("output")
+    cap = out.get("$capture") if isinstance(out, dict) else None
+    rows = cap.get("calls") if isinstance(cap, dict) else None
+    if not isinstance(rows, list):
+        return
+    def key(r):
+        return ("kind", r.get("kind")) if "url" not in r else \
+            (r.get("method"), r.get("pattern") or r.get("url"))
+    before = {key(r) for r in cells.window_index(workflow_id, num - 1)}
+    new = [r for r in rows if "url" not in r or key(r) not in before]
+    same = len(rows) - len(new)
+    if not same:
+        return
+    result["output"] = {**out, "$capture": {
+        **cap, "calls": new,
+        "calls_unchanged": f"{same} data requests are the same as window {num - 1} "
+                           f"made and are not listed again; \"$recorded:calls#{num}\" "
+                           "has every request of this window"}}
 
 # Runs the cell in the production sandbox and records the run under the step's name
 def execute(c: CellCall) -> dict:
@@ -371,7 +464,7 @@ def execute(c: CellCall) -> dict:
                           should_stop=lambda: steps.turns_should_stop(workflow),
                           on_progress=steps.cell_progress(workflow["id"]),
 
-                          on_user_request=(_window_request(workflow)
+                          on_user_request=(_window_request(workflow, name)
                                            if c.is_browser else None),
 
                           keep_captures=c.is_browser,
@@ -383,14 +476,25 @@ def execute(c: CellCall) -> dict:
         ok, result = True, {"ok": True, "output": out}
 
         if c.plan_step:
-            problems = _ports.check_ports(c.plan_step.get("outputs") or [], out,
-                                          require_all=True)
+            from runtime.output_contract import normalize
+
+            out = normalize(c.plan_step.get("outputs") or [], out, named=True)
+            from runtime.executor import iterated_input_names
+            import step_types as _st
+            problems = _ports.check_ports(
+                c.plan_step.get("outputs") or [], out, require_all=True,
+                empty_ok=not _st.empty_list_is_a_warning(
+                    c.plan_step, inputs, iterated_input_names(code)))
             if problems:
                 ok, result = False, {
                     "ok": False, "output": out,
                     "error": "the result did not match what this step declares: "
                              + "; ".join(_ports.problem_lines(problems)),
                     "note": "the try is judged as a run: make the step produce the value, or if it may genuinely be empty some runs mark that output optional on the plan step"}
+
+                hint = _checkpoints_hint(c.plan_step.get("outputs") or [], out, c.code)
+                if hint:
+                    result["note"] = hint
 
         if c.is_browser:
             from agent import cells as _cells
@@ -414,7 +518,7 @@ def execute(c: CellCall) -> dict:
         low = msg.lower()
 
         if isinstance(e, sandbox.NodeError) and ("NameError" in msg or "is not defined" in msg):
-            result["note"] = ("that name does not exist in a cell. The cell surface is read_input / write_output / get_secret / write_file / heartbeat / checkpoint / checkpoints / mark_sent / unexpected_input, in a browser cell `page` with browser_goto / confirm_with_user, plus plain Python; a recorded value is read with read_input after chaining it as \"$recorded:<name>\" in inputs.")
+            result["note"] = ("that name does not exist in a cell. The cell surface is read_input / write_output / get_secret / write_file / heartbeat / checkpoint / checkpoints / checkpoint_values / mark_sent / unexpected_input, in a browser cell `page` with browser_goto / confirm_with_user, plus plain Python; a recorded value is read with read_input after chaining it as \"$recorded:<name>\" in inputs.")
 
         if "modulenotfounderror" in low or "no module named" in low \
                 or "is not installed" in low or "please install" in low:
@@ -441,11 +545,19 @@ def execute(c: CellCall) -> dict:
     if ok and result.get("captured"):
         num = len(cells.windows(workflow["id"]))
         result["window"] = num
-        result["captured_note"] = (
-            f"this was window {num}" + (f" ({c.reason})" if c.reason else "")
-            + ". It kept " + ", ".join(result["captured"]) + ". Read any of "
-            f"them in the next cell with \"$recorded:<name>#{num}\" "
-            "(\"$recorded:<name>\" is always the newest window); read_input returns the recording already parsed, and read_input(name, path=True) gives a file path when a library wants one - the traffic (har) holds every request and response, the page (page) is the document as the window left it, and the listing (calls) is one line per call with its id; the listing on this result is folded (repeats of one address in one row, other kinds as counts), and read_input(\"calls\", kind=\"image\") or ids=[...] unfolds any row in full (url=, status=, method= filter the same way, on har too). Every earlier window's recording stays readable by its number until the build is done, so compare them before opening the page again.")
+        _only_new_requests(workflow["id"], num, result)
+        if num > 1:
+            result["captured_note"] = (
+                f"this was window {num}" + (f" ({c.reason})" if c.reason else "")
+                + ". Read its recordings with \"$recorded:har#" + str(num) + "\", "
+                f"\"$recorded:page#{num}\" and \"$recorded:calls#{num}\", and compare "
+                "them with earlier windows' before opening the page again.")
+        else:
+            result["captured_note"] = (
+                f"this was window {num}" + (f" ({c.reason})" if c.reason else "")
+                + ". It kept " + ", ".join(result["captured"]) + ". Read any of "
+                f"them in the next cell with \"$recorded:<name>#{num}\" "
+                "(\"$recorded:<name>\" is always the newest window); read_input returns the recording already parsed, and read_input(name, path=True) gives a file path when a library wants one - the traffic (har) holds every request and response, the page (page) is the document as the window left it, and the listing (calls) is one line per call with its id; the listing on this result is folded (repeats of one address in one row, other kinds as counts), and read_input(\"calls\", kind=\"image\") or ids=[...] unfolds any row in full (url=, status=, method= filter the same way, on har too). Every earlier window's recording stays readable by its number until the build is done, so compare them before opening the page again.")
     result.update({"cell": name, "runs": n, "seconds": round(_time.time() - t0, 1)})
     if ok:
         if c.prior and c.code_key(c.prior.get("code")) != c.code_key():
@@ -484,9 +596,10 @@ def run_many(workflow: dict, specs) -> dict:
     if not isinstance(specs, list) or not specs:
         return {"error": "cells must be a list of cells: [{name, code, inputs?, ...}, ...]"}
     bad = [i for i, s in enumerate(specs)
-           if not isinstance(s, dict) or not str(s.get("name") or "").strip() or not str(s.get("code") or "").strip()]
+           if not isinstance(s, dict) or not str(s.get("name") or "").strip()]
     if bad:
-        return {"error": f"every cell needs a name and code (cells {bad} lack one)"}
+        return {"error": f"every cell needs a name (cells {bad} lack one); code may be left "
+                         "out only to run a step's own code again"}
     unknown = sorted({k for s in specs for k in s if k not in _CELL_KEYS})
     if unknown:
         return {"error": f"a cell of the call takes the single call's arguments only; not {unknown}"}
@@ -497,7 +610,7 @@ def run_many(workflow: dict, specs) -> dict:
     if dependent:
         return {"error": "cells in one call must not read each other's outputs: "
                          + "; ".join(dependent) + " - a cell that needs another's result runs after it, in its own call"}
-    calls = [CellCall(workflow, str(s["name"]), str(s["code"]), s.get("inputs"),
+    calls = [CellCall(workflow, str(s["name"]), str(s.get("code") or ""), s.get("inputs"),
                       s.get("packages"), bool(s.get("fresh")), bool(s.get("browser_ok")),
                       str(s.get("reason") or ""), bool(s.get("send_ok")),
                       str(s.get("missing") or ""), str(s.get("ask_again") or ""),
@@ -512,7 +625,7 @@ def run_many(workflow: dict, specs) -> dict:
             if answer is not None:
                 break
         if answer is not None:
-            results[i] = {**answer, "cell": c.name}
+            results[i] = _with_notes(c, {**answer, "cell": c.name})
         else:
             runnable.append(i)
     together = [i for i in runnable if not calls[i].is_browser]
@@ -520,9 +633,9 @@ def run_many(workflow: dict, specs) -> dict:
     if together:
         with _cf.ThreadPoolExecutor(max_workers=len(together)) as pool:
             for i, r in zip(together, pool.map(lambda j: execute(calls[j]), together)):
-                results[i] = r
+                results[i] = _with_notes(calls[i], r)
     for i in windows:
-        results[i] = execute(calls[i])
+        results[i] = _with_notes(calls[i], execute(calls[i]))
     ok = all(isinstance(r, dict) and r.get("ok") for r in results)
     return {"ok": ok, "results": results,
             "note": (f"{len(results)} cells ran in one call; each result is under its "
@@ -538,5 +651,11 @@ def run(workflow: dict, name: str, code: str, inputs=None, packages=None,
     for g in CELL_GATES:
         answer = g(c)
         if answer is not None:
-            return answer
-    return execute(c)
+            return _with_notes(c, answer)
+    return _with_notes(c, execute(c))
+
+# What the harness decided about a cell on the builder's behalf, said on its result
+def _with_notes(c: CellCall, result):
+    if not c.notes or not isinstance(result, dict):
+        return result
+    return {**result, "note": " ".join(n for n in (*c.notes, result.get("note")) if n)}

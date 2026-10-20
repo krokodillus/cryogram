@@ -26,8 +26,8 @@ def asks_every_run_without_reason(node: dict) -> list[str]:
     if (node.get("inputs") or []) or str(node.get("per_run_reason") or "").strip():
         return []
     return [
-        f'step "{node.get("name")}" would ask the user for a value on '
-        "EVERY run. IF THE USER ASKED for that (they want to give the value each run), KEEP the step and set per_run_reason to their wish - never delete a step the user asked for to pass this check. Only when the value rarely changes make it a variable instead (declare_variables, with the value if known) and drop the step - an input no earlier step produces resolves from the same-named variable at run time"]
+        f'step "{node.get("name")}" asks the user for a value on every run. '
+        "If each run needs its own value (a new file, the user's choice for that run, or the user asked to give it each time), keep the step and set its `per_run_reason` field: one sentence on the step, beside its name and type, saying why. Never remove a step the user asked for to pass this check. If the value rarely changes, store it as a setting with declare_variables and remove the step; an input no earlier step produces is read from the setting of the same name"]
 
 # Warnings about ports the run form cannot render well
 def port_warnings(node: dict) -> list[str]:

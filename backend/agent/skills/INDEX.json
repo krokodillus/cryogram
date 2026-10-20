@@ -1,5 +1,5 @@
 {
-  "skills_version": 1,
+  "skills_version": 4,
   "min_app": "",
   "skills": [
     {
@@ -7,10 +7,10 @@
       "group": "shared",
       "tier": 1,
       "kind": "policy",
-      "description": "What Cryogram is, the rules the product itself enforces, what you can reach on the user's computer, the claims you must never make, and how you spend a turn",
+      "description": "What Cryogram is, what each kind of step may do, approvals, secrets, and saying honestly what was done",
       "depends_on": [],
-      "version": "4.3.0",
-      "last_updated": "2026-09-15",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "shared/00-what-cryogram-is/SKILL.md"
     },
     {
@@ -18,10 +18,10 @@
       "group": "shared",
       "tier": 1,
       "kind": "policy",
-      "description": "Every sentence the user reads - plain words, no internal names or ids, which language to write in, what you never reveal, and how much to say",
+      "description": "How you write to the user: plain words, the result first, what was tried, and what you never reveal",
       "depends_on": [],
-      "version": "4.2.0",
-      "last_updated": "2026-09-10",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "shared/01-how-you-write/SKILL.md"
     },
     {
@@ -29,10 +29,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "What to do with each kind of message the user can send - an answer, feedback, a correction, a new requirement, a failed run, a changed value, a question, a new request, or chat - and how a change to a built workflow is worked without starting over",
+      "description": "When a message arrives, tell apart a question, a value, feedback on a result and a change, and do only what it asks",
       "depends_on": [],
-      "version": "4.3.0",
-      "last_updated": "2026-09-14",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/02-a-message-arrives/SKILL.md"
     },
     {
@@ -40,10 +40,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "The first turn of a new workflow - announcing what you will do and saving the outline, collecting every value at the start, asking for credentials only through the masked question, and how to ask so the user is never asked twice",
+      "description": "How to start a new workflow: save the outline, get the opening card approved, and ask only for what is missing",
       "depends_on": [],
-      "version": "4.3.0",
-      "last_updated": "2026-09-15",
+      "version": "5.2.0",
+      "last_updated": "2026-10-14",
       "path": "agent/03-starting-the-work/SKILL.md"
     },
     {
@@ -51,10 +51,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "Doing each step for real as a cell on the real sample - what a cell may and may not do, probing without waste, leaving working code alone, opening a browser window, and testing a step that sends something for real",
+      "description": "How to try each step for real, reuse what earlier tries saved, and keep test values apart from saved settings",
       "depends_on": [],
-      "version": "4.4.0",
-      "last_updated": "2026-09-15",
+      "version": "5.1.0",
+      "last_updated": "2026-10-14",
       "path": "agent/04-working-a-step/SKILL.md"
     },
     {
@@ -62,10 +62,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "The two places a lesson is written down - a fact kept on this workflow, or a learning shared with every build - and when each is written",
+      "description": "What to save for later: facts about this workflow, and learnings that hold for other workflows too",
       "depends_on": [],
-      "version": "4.1.0",
-      "last_updated": "2026-09-06",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/05-what-you-learn/SKILL.md"
     },
     {
@@ -73,10 +73,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "Showing the result and taking feedback, what a later save of the plan carries and what it never repeats, and when and how the build happens",
+      "description": "How to show results, save changes to the plan, get a change or fix approved, and what must be true before you build",
       "depends_on": [],
-      "version": "4.7.0",
-      "last_updated": "2026-09-16",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/06-showing-and-building/SKILL.md"
     },
     {
@@ -84,10 +84,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "The plan the build reads - the workflow's summary and purpose, what each step declares, the order steps run in, how the work splits into steps, the checks, what may be empty, where each value lives, documents, and the design gaps to resolve before building",
+      "description": "What a plan holds: where one step ends and the next begins, typed inputs and outputs, the lines between steps, checks, and where each value is stored",
       "depends_on": [],
-      "version": "4.4.0",
-      "last_updated": "2026-09-15",
+      "version": "5.2.1",
+      "last_updated": "2026-10-14",
       "path": "agent/07-what-a-plan-contains/SKILL.md"
     },
     {
@@ -95,10 +95,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "policy",
-      "description": "What to say when a run has failed or something is in the way, how a repair is agreed and built, and the one glance at earlier runs a turn takes when the workflow has history",
+      "description": "When a run failed: find the cause from what the run recorded, and tell a setup problem apart from a fault in a step",
       "depends_on": [],
-      "version": "4.4.0",
-      "last_updated": "2026-09-16",
+      "version": "5.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/08-when-a-run-failed/SKILL.md"
     },
     {
@@ -106,10 +106,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN an undocumented external system must become scriptable - capture its traffic (an app-recorded HAR/demonstration, or an uploaded HAR) and derive the call contract from the recording sample",
+      "description": "WHEN no documentation says how to call a service, and you work it out from a HAR file or from the user showing the steps",
       "depends_on": [],
-      "version": "2.0.0",
-      "last_updated": "2026-09-06",
+      "version": "3.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/25-recordings/SKILL.md"
     },
     {
@@ -117,10 +117,10 @@
       "group": "agent",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN diagnosing a failed run or designing a change to a built workflow - what the corpus records, how to diagnose the class of a failure, and how to design against stored cases without running the saved process",
+      "description": "WHEN a failed run or a change needs the cases that earlier runs recorded, or a precise count across them",
       "depends_on": [],
-      "version": "2.0.0",
-      "last_updated": "2026-09-06",
+      "version": "3.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/40-corpus-and-verdicts/SKILL.md"
     },
     {
@@ -128,12 +128,12 @@
       "group": "agent",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN designing or fixing a CONNECTOR step (anything that reaches an outside system - send, post, fetch, write) - what to include, how to structure it, what to test",
+      "description": "WHEN you design or fix a connector step: how it reaches another service, how it checks the service did what was asked, and how it sends safely",
       "depends_on": [
         "07-what-a-plan-contains"
       ],
-      "version": "2.2.0",
-      "last_updated": "2026-09-16",
+      "version": "3.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/61-connector-practice/SKILL.md"
     },
     {
@@ -141,12 +141,12 @@
       "group": "agent",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN designing or fixing an AI step (per-run judgement - summarise, classify, extract, draft) - what to include, how to structure it, what to test, how to tune",
+      "description": "WHEN you design or fix an AI step: the prompt and what it judges by, the shape of its answer, how to try it and how to tune it",
       "depends_on": [
         "07-what-a-plan-contains"
       ],
-      "version": "2.2.0",
-      "last_updated": "2026-09-10",
+      "version": "3.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/62-ai-practice/SKILL.md"
     },
     {
@@ -154,12 +154,12 @@
       "group": "agent",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN designing or fixing a CODE step (deterministic work - parse, transform, compute, file) - the pure-step shape, what to include, what to test",
+      "description": "WHEN you design or fix a code step: work on this computer that gives the same result every time, such as transforming data or reading and writing files",
       "depends_on": [
         "07-what-a-plan-contains"
       ],
-      "version": "2.1.0",
-      "last_updated": "2026-09-14",
+      "version": "3.0.0",
+      "last_updated": "2026-10-13",
       "path": "agent/63-code-practice/SKILL.md"
     },
     {
@@ -167,10 +167,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read or write records in Airtable - the personal-access-token route, exact user setup steps, the request pattern, batching and known gotchas",
+      "description": "WHEN a step reads or writes Airtable records: how to get a personal access token, how to page through records, how to write them, and what makes a request fail",
       "depends_on": [],
-      "version": "1.1.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/airtable/SKILL.md"
     },
     {
@@ -178,10 +178,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs data from a website that blocks automated requests (a 403 or bot check on a plain fetch) or has no usable API - Reddit always, go straight here - drive the user's real Chrome with Playwright",
+      "description": "WHEN a step needs a browser window on a site: how to open pages, read them, scroll lists, check you are on the right page, and reuse what earlier windows saved",
       "depends_on": [],
-      "version": "2.8.0",
-      "last_updated": "2026-09-15",
+      "version": "3.2.0",
+      "last_updated": "2026-10-16",
       "path": "connectors/browser/SKILL.md"
     },
     {
@@ -189,10 +189,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a browser step needs a signed-in session - first sign-in, an expired session, a captcha or verification page - how the app keeps the session, how the step tells whether the person is signed in, confirm_with_user, the sign-in step and the single sign-on warning",
+      "description": "WHEN a browser workflow needs the user to be signed in to a site, or a sign-in has stopped working",
       "depends_on": [],
-      "version": "4.0.0",
-      "last_updated": "2026-09-13",
+      "version": "5.1.0",
+      "last_updated": "2026-10-17",
       "path": "connectors/browser-login/SKILL.md"
     },
     {
@@ -200,10 +200,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read or write rows in a SQL database the user already has (Postgres, MySQL, SQLite; Supabase/Neon/RDS/PlanetScale) - driver vs REST routes, connection-string handling, transient-vs-config errors",
+      "description": "WHEN a step reads or writes a SQL database: how to choose between a driver and Supabase's REST address, how to store the connection string, and how to tell a temporary failure from a wrong setting",
       "depends_on": [],
-      "version": "1.2.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/database/SKILL.md"
     },
     {
@@ -211,10 +211,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read incoming email (poll a mailbox, fetch new messages/attachments) - Gmail IMAP app-password route, Outlook bridge reality, the new-since-last-run pattern",
+      "description": "WHEN a step reads messages from a mailbox during a run: Gmail IMAP with an app password, an Apps Script bridge, or Outlook and Microsoft 365",
       "depends_on": [],
-      "version": "1.1.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/email-inbox/SKILL.md"
     },
     {
@@ -222,10 +222,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to add rows to or read data from an Excel file stored in OneDrive/SharePoint - the Power Automate bridge for writes, the named-table requirement, date handling, and share-link reads",
+      "description": "WHEN a step reads or writes an Excel workbook in OneDrive or SharePoint: which routes are possible, and why the data must be in a named Excel table",
       "depends_on": [],
-      "version": "1.2.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/excel-onedrive/SKILL.md"
     },
     {
@@ -233,10 +233,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to send email from a Gmail address - the app-password route (locked in), exact click-through setup, the send pattern, and the company-IT fallback",
+      "description": "WHEN a step sends email from a Gmail address: use a connection that already exists, or set up SMTP with an app password",
       "depends_on": [],
-      "version": "1.2.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/gmail/SKILL.md"
     },
     {
@@ -244,10 +244,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read events from or create events in Google Calendar - the secret iCal read route, service-account routes, the attendee limitation, gotchas",
+      "description": "WHEN a step reads or creates Google Calendar events: the secret iCal address, the Calendar API with a service account, or an Apps Script bridge",
       "depends_on": [],
-      "version": "1.2.0",
-      "last_updated": "2026-09-10",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/google-calendar/SKILL.md"
     },
     {
@@ -255,10 +255,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read files from or write files to Google Drive - share-link and service-account reads, the Apps Script write bridge (service-account writes are dead), gotchas",
+      "description": "WHEN a step reads files from Google Drive or writes files to it: downloading by share link, a service account, an Apps Script bridge, and who owns an uploaded file",
       "depends_on": [],
-      "version": "1.4.0",
-      "last_updated": "2026-09-10",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/google-drive/SKILL.md"
     },
     {
@@ -266,10 +266,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read from or write to a Google Sheet - the proven connection routes, the exact user setup steps and the known gotchas, so you never rediscover them live",
+      "description": "WHEN a step reads or writes a Google Sheet: how to choose between an Apps Script web app, the Sheets API with a service account, and the CSV export link",
       "depends_on": [],
-      "version": "1.6.0",
-      "last_updated": "2026-09-10",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/google-sheets/SKILL.md"
     },
     {
@@ -277,10 +277,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to post a message to Microsoft Teams (channel, group chat, or direct to a person) - the Workflows-webhook route (locked in), the use-case fork, sender attribution facts, click-through setup, and the company-IT fallback",
+      "description": "WHEN a step posts a message to Microsoft Teams: how to set up the webhook for a channel, a group chat or one person, and how to tell that Teams accepted a post apart from Teams delivering it",
       "depends_on": [],
-      "version": "1.8.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/microsoft-teams/SKILL.md"
     },
     {
@@ -288,10 +288,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read or write rows in a Notion database - the internal-integration route, the connect-the-page step everyone forgets, exact property shapes and known gotchas",
+      "description": "WHEN a step reads or writes rows in a Notion database: which connection to use, how to find the database's data source, and the exact shape of each property",
       "depends_on": [],
-      "version": "1.2.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/notion/SKILL.md"
     },
     {
@@ -299,10 +299,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to read a file from or save a file into OneDrive (personal or work/school) - the no-admin routes, the Power Automate bridge for writes, share-link reads, and the gotchas",
+      "description": "WHEN a step reads or writes files in OneDrive: private access that is already authorised, a Power Automate bridge flow for writes, or a share link for reads",
       "depends_on": [],
-      "version": "1.1.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/onedrive/SKILL.md"
     },
     {
@@ -310,10 +310,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to send email from an Outlook / Microsoft 365 address - the one question that decides the route (personal vs work account), the basic-auth retirement, the bridge-flow route, and the company-IT fallback",
+      "description": "WHEN a step sends mail from Outlook or Microsoft 365: which routes fit the account type, and how to confirm that the mail was delivered",
       "depends_on": [],
-      "version": "1.4.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/outlook-email/SKILL.md"
     },
     {
@@ -321,10 +321,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to post a message to Slack - the incoming-webhook route, exact user setup steps, the resilient post pattern and known gotchas",
+      "description": "WHEN a step posts a message to Slack: how to set up an incoming webhook for one fixed channel, how to post to it, and what makes a post fail",
       "depends_on": [],
-      "version": "1.3.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/slack/SKILL.md"
     },
     {
@@ -332,10 +332,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a workflow step needs to call a generic webhook or plain HTTP API endpoint the user provides - the resilient request pattern, verification and gotchas",
+      "description": "WHEN a step calls an HTTP address the user gave you (their own service, or a Zapier, Make, n8n or IFTTT hook): how to store the address, how to send the request, and how to check that the other side did the work",
       "depends_on": [],
-      "version": "1.1.0",
-      "last_updated": "2026-09-06",
+      "version": "2.0.0",
+      "last_updated": "2026-10-13",
       "path": "connectors/webhook/SKILL.md"
     }
   ]

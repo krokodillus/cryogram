@@ -367,4 +367,7 @@ def delete_workflow(workflow_id: str) -> dict:
             db.runstate_delete(rec["run_id"])
     for name in (f"{workflow_id}.jsonl", f"{workflow_id}.1.jsonl"):
         (config.DATA_DIR / "logs" / name).unlink(missing_ok=True)
+
+    import shutil
+    shutil.rmtree(config.DATA_DIR / "logs" / f"{workflow_id}.builder", ignore_errors=True)
     return {"ok": True}

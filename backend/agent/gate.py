@@ -16,7 +16,7 @@ AI_ENDPOINTS: tuple[str, ...] = ("api.openai.com", "api.anthropic.com", "googlea
 
 RESERVED_NAMES: set[str] = {"ai_call", "read_input", "write_output",
                             "get_secret", "write_file",
-                            "heartbeat", "checkpoint", "checkpoints", "mark_sent",
+                            "heartbeat", "checkpoint", "checkpoints", "checkpoint_values", "mark_sent",
                             "browser_page", "browser_goto", "confirm_with_user",
                             "unexpected_input",
                             "page"}
@@ -30,6 +30,26 @@ PACKAGE_FOR_IMPORT = {
     "gi": "PyGObject", "serial": "pyserial", "usb": "pyusb", "Foundation": "pyobjc",
     "AppKit": "pyobjc", "objc": "pyobjc",
 }
+
+IMPORT_NEEDS = {
+    "google.auth.transport.requests": "requests",
+}
+
+# The packages the code's imports need beyond their own top-level names
+def implied_roots(code: str) -> list[str]:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module)
+            names |= {f"{node.module}.{a.name}" for a in node.names}
+    return sorted({need for mod, need in IMPORT_NEEDS.items()
+                   if any(n == mod or n.startswith(mod + ".") for n in names)})
 
 # A syntax error, named with its line, before the code is run anywhere
 def check_syntax(code: str) -> list[str]:
@@ -67,6 +87,8 @@ def check(code: str, declared_vars: list[str] | None = None) -> list[str]:
     violations: list[str] = []
     violations += _check_except_handlers(tree)
     violations += _check_reserved_names(tree)
+    from runtime import contracts
+    violations += contracts.check_calls(tree)
     return violations
 
 def _check_except_handlers(tree: ast.AST) -> list[str]:
@@ -183,6 +205,17 @@ def read_input_names(code: str) -> set:
             and n.func.id == "read_input" and n.args
             and isinstance(n.args[0], ast.Constant)
             and isinstance(n.args[0].value, str)}
+
+# Whether the code can ask the person at the machine to do something in its window
+def asks_person(code: str) -> bool:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.Call)
+               and ((isinstance(n.func, ast.Name) and n.func.id == "confirm_with_user")
+                    or (isinstance(n.func, ast.Attribute) and n.func.attr == "confirm_with_user"))
+               for n in ast.walk(tree))
 
 # An input list the code cuts to a fixed number of items, as (input name, number) pairs
 def literal_item_caps(code: str) -> list[tuple[str, int]]:

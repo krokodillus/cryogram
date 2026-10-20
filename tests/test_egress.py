@@ -115,6 +115,18 @@ class HeartbeatWatchdogTest(unittest.TestCase):
         self.assertEqual(cm.exception.kind, "NoProgress")
         self.assertEqual(cm.exception.detail.get("written"), {"rows": [1, 2]})
 
+    def test_time_asleep_is_not_silence(self):
+        from unittest import mock
+        real = time.time
+        calls = {"n": 0}
+        def jumpy():
+            calls["n"] += 1
+            return real() + (120 if calls["n"] > 5 else 0)
+        code = "import time\ntime.sleep(1.5)\nwrite_output('done', True)\n"
+        with mock.patch("time.time", jumpy):
+            res = sandbox.run(code, None, {}, {}, timeout=10)
+        self.assertEqual(res.get("done"), True)
+
     def test_clamp_timeout_bounds(self):
         self.assertIsNone(sandbox.clamp_timeout(None))
         self.assertIsNone(sandbox.clamp_timeout("soon"))

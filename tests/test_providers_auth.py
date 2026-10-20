@@ -145,8 +145,7 @@ class TokenCeilingTest(unittest.TestCase):
         import json
         import providers as P
         payload = {"stop_reason": "max_tokens",
-                   "content": [{"type": "tool_use", "name": "emit_output",
-                                "input": {"summary": "half an ans"}}]}
+                   "content": [{"type": "text", "text": '{"summary": "half an ans'}]}
 
         class _Resp:
             def read(self): return json.dumps(payload).encode()
@@ -166,9 +165,8 @@ class TokenCeilingTest(unittest.TestCase):
     def test_a_complete_structured_answer_still_comes_through(self):
         import json
         import providers as P
-        payload = {"stop_reason": "tool_use",
-                   "content": [{"type": "tool_use", "name": "emit_output",
-                                "input": {"summary": "done", "triaged": []}}]}
+        payload = {"stop_reason": "end_turn",
+                   "content": [{"type": "text", "text": '{"summary": "done", "triaged": []}'}]}
 
         class _Resp:
             def read(self): return json.dumps(payload).encode()
@@ -225,8 +223,8 @@ class TemperatureTest(unittest.TestCase):
 
         class _Resp:
             def read(self):
-                return _json.dumps({"stop_reason": "tool_use", "content": [
-                    {"type": "tool_use", "input": {"v": 1}}]}).encode()
+                return _json.dumps({"stop_reason": "end_turn", "content": [
+                    {"type": "text", "text": '{"v": 1}'}]}).encode()
             def __enter__(self): return self
             def __exit__(self, *a): return False
 

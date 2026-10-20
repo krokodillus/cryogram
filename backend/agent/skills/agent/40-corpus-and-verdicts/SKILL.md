@@ -1,27 +1,21 @@
 ---
 name: 40-corpus-and-verdicts
-description: WHEN diagnosing a failed run or designing a change to a built workflow - what the corpus records, how to diagnose the class of a failure, and how to design against stored cases without running the saved process
+description: WHEN a failed run or a change needs the cases that earlier runs recorded, or a precise count across them
 tier: 2
 kind: action
 depends_on: []
-version: 2.0.0
-last_updated: 2026-09-06
+version: 3.0.0
+last_updated: 2026-10-13
 ---
 
-# The corpus: the workflow's memory and your test bench
+# Recorded cases: what earlier runs show
 
-Every run of every step is recorded as a case. A success holds the input and the verified output; a failure holds the input, what the check saw and the raw circumstances. Each case has a kind ("success" or "failure"), a case id, its run id and a time, and its inputs with every secret value scrubbed out. A failure's verdict says what the check saw, keyed by cause: hard_failures for the step's own criteria, standard_input_check or standard_output_check for the declared port shape, thrown for an exception with its type and message. A failure's observed part is the raw circumstances: the step type, soft flags, tracebacks and timings. Its cause and class are empty when captured; you fill them with diagnose_case after investigating. Pauses are not cases: a run waiting for approval, a missing value or secret, a blocked address or an environment problem halts resumably and records nothing here.
+Use what you already have first. Then use `read_cases` to read a few typical runs of a step that worked and that failed, or `query_corpus` for a precise count across them. Read only the steps and the cases the problem is about. `corpus_summary` is there when it helps, not something to call at the end of every turn.
 
-## Diagnosing a failure
+Each case records a step's real inputs, its output or the reason it failed, how long it took, and the circumstances, with secrets masked. A failure can carry `hard_failures` (checks that failed), `standard_input_check` or `standard_output_check` (an input or output of the wrong type), or `thrown` (an error the code raised). The `cause` and `cls` fields are notes someone added: a field being there does not make its cause true. A run that paused for setup, an approval or a missing value is not a case of a fault.
 
-Diagnose the class, not the instance: compare the failing input with the stored successes and find the property the failure has that every success lacks. That property names the class. Record it with diagnose_case(node_id, case_id, cause, cls) before designing the fix. A fix is class-level, handling every input of that class, and the failing case together with the stored successes is the regression set the fix must pass. When the same step fails the same class despite earlier fixes, stop patching: the step is misclassified, either deterministic code doing a fuzzy job or one step doing two jobs. Propose a split, with a small AI step exactly where the input turned out fuzzy.
+Compare the failing case with cases that worked, find a cause the cases support and the conditions under which it happens, and record it with `diagnose_case`. One example never shows a rule for every case, and the same failure happening again does not show that code must become an AI step. Say when you are not sure.
 
-The halt reasons that create a ticket are a failed criterion ("output-check-failed"), a failed declared shape ("output-check-failed (standard)" or "input-check-failed") and an exception ("node threw: <Type>"). The resumable pauses (awaiting-approval, missing-value, egress-blocked, environment-check-failed) never create one.
+Before you change or try a step of a built workflow for real, save the change's or the fix's declaration and wait for the user's click on its card (skills 06 and 08). Reason from the recorded cases, and keep what used to work working. `run_node` can run one saved code or AI step on its own where that is allowed; running an AI step this way calls its model, which the user pays for. It cannot run connector steps, and it cannot run the saved workflow's steps one after another.
 
-## Designing a change against the corpus, never by running the saved process
-
-Read the current structure first: list_nodes, then read_node on everything the change touches. The relevant learnings are already in your context. Pull real cases: read_cases(node_id, "success") for representative inputs and outputs at the point of change, and the failures too when a failure motivates the change. Use query_corpus for precise questions (counts, clusters, contrast sets) rather than reading everything. Work the change through on paper against those cases: for each stored input, what would the changed step produce, and would any stored success now fail?
-
-When you must see behaviour to be confident, run_node runs one saved code or AI step on a stored input, in isolation. That is as far as the built steps go: connectors are excluded, and you never execute or hand-chain the workflow. A new step the change adds is different: prove it as a cell (run_cell on stored cases or samples, with effects design-only), because the build refuses an unproven code step. The next real run is the live test.
-
-Then save the plan: which steps change, are added or removed, with tests seeded from the cases you reasoned over, the motivating one included. Say plainly in the chat that the change is designed against the real past runs you used, how many, that the next run is the live test, and that a failure comes straight back to you.
+A changed or new step still needs the kind of try its type requires. Pass the recorded inputs to a try with the step's name, or to an AI try. A step that changes something outside gets its normal approval card, or is left untried when the user says no, in the way the guides describe. Never invent a success, and never call reading through the code a real test. Say what you actually checked, and what only the next run the user starts can show.

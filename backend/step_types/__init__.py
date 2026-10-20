@@ -55,6 +55,15 @@ def writes_outside(node) -> bool:
         else getattr(node, "read_only", False)
     return not ro
 
+# Is an empty list from this step a warning sign? Only for a step that reads from outside
+def empty_list_is_a_warning(node, inputs=None, looped=()) -> bool:
+    if not reaches_outside(node) or writes_outside(node):
+        return False
+    inputs = inputs if isinstance(inputs, dict) else {}
+    if any(isinstance(inputs.get(n), list) and not inputs.get(n) for n in looped):
+        return False
+    return True
+
 # Does this step run authored code?
 def carries_code(node) -> bool:
     return step_type(node) in CODE_TYPES

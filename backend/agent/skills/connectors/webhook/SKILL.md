@@ -1,27 +1,27 @@
 ---
 name: webhook
-description: WHEN a workflow step needs to call a generic webhook or plain HTTP API endpoint the user provides - the resilient request pattern, verification and gotchas
+description: WHEN a step calls an HTTP address the user gave you (their own service, or a Zapier, Make, n8n or IFTTT hook): how to store the address, how to send the request, and how to check that the other side did the work
 tier: 2
 kind: action
 depends_on: []
-version: 1.1.0
-last_updated: 2026-09-06
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # Generic webhooks and plain HTTP endpoints
 
-The catch-all route when the target is just a URL the user owns: their own service, a Zapier, Make or n8n hook, IFTTT.
+Use this guide when the target is only an address the user controls: their own service, or a Zapier, Make, n8n or IFTTT hook.
 
 ## Setup
 
-The URL is usually a credential, since possessing it is permission to post: collect it through the masked ask unless the user says it is public. Any separate token or key is always a masked ask. Ask the user what a successful response looks like (status and body). If they do not know, send one agreed test request during exploration and read the answer together. Never guess the contract.
+An address or token that gives access is a credential. Ask for it with the masked ask (the card that hides what the user types), and store it as a secret. A user telling you the endpoint is public does not make its token any less secret. To learn what the endpoint answers with, use the documentation the user gave you or what the recorded tries show, and ask the user only if you still do not know. You may make one approved test request to find out the shape of the request. An answer of 200 or 202 does not prove that the work behind the endpoint is finished. Do not assume or promise a delivery guarantee that the service does not give.
 
-## The request pattern
+## How to send the request
 
-An explicit timeout of 15 to 30 seconds. Retry timeouts, connection errors, 5xx and 429 with a short, bounded backoff; never retry any other 4xx, because the request is wrong and needs fixing. Set Content-Type explicitly, send JSON, and parse the response body for the service's own success or error signal: a 200 with {"error": ...} is a failure. Follow at most one redirect, and declare both hosts in `domains` if the service redirects, which test hooks often do.
+Set an explicit timeout of 15 to 30 seconds. Send a POST that has an effect only once, unless the receiving service promises to ignore duplicates and you send a fixed idempotency key with it. A request that times out may still have been accepted, so find out whether it was before you send it again. A request that only reads may be retried with the retry helper from the connector-practice guide. Set the Content-Type header yourself and send JSON. Read the response body for the service's own success or error answer: a 200 response with {"error": ...} in the body is a failure. Follow one redirect at most. Test hooks often redirect, so when the service does, declare both hosts in `domains`.
 
 ## What goes wrong
 
-- Zapier and Make test hooks return 200 for anything. Verify that the action happened (ask the user to check once during exploration), not just the status.
-- A trailing slash and http versus https are real 404s and 301s: store the URL exactly as pasted.
-- Payload size limits are common (about 1 MB). Send references or trimmed content, not whole documents, unless the contract says otherwise.
+- Zapier and Make test hooks answer 200 to anything. Do not trust the status code. During the build, ask the user once to check that the action really happened.
+- A missing or extra slash at the end of the address, and http instead of https, give 404 and 301 answers. Store the address exactly as the user pasted it.
+- When the size of the request matters, look up the endpoint's own size limit: webhooks have no common limit. Never cut out data the request needs, and never replace it with a link the endpoint cannot open, unless the user agrees.

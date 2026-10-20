@@ -1,8 +1,9 @@
-# The update check: reads the latest release from the public repository and says whether it is newer
+# The update check: asks cryogram.app for the public repository's latest release and says whether it is newer
 from __future__ import annotations
 
 import json
 import os
+import platform
 import ssl
 import urllib.error
 import urllib.request
@@ -32,8 +33,13 @@ def _update_url() -> str:
 def _version_tuple(v: str) -> tuple:
     return config.version_tuple(v)
 
+# The User-Agent the check sends: the app's version and the operating system, nothing that names this computer
+def user_agent() -> str:
+    return f"Cryogram/{config.VERSION} ({platform.platform()})"
+
 def _http_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "User-Agent": user_agent()})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT,
                                 context=_SSL_CTX) as r:
         return json.loads(r.read().decode())
@@ -70,7 +76,6 @@ def check(force: bool = False) -> dict:
         "available": bool(latest) and
         _version_tuple(latest) > _version_tuple(config.VERSION),
         "latest": latest,
-        "changelog": str(v.get("body") or ""),
         "page": str(v.get("html_url") or ""),
         "channel_kind": kind,
     }

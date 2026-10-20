@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 FIELDS = ("ask_open", "built", "pending_fix", "fix_issue_id",
-          "last_plan_attempt", "opening_card_show_now",
-          "build_now", "env_seen")
+          "last_plan_attempt", "opening_card_show_now", "note_to_show",
+          "build_now", "env_seen", "guidance_seen")
 
 KEY = "_turn"
 

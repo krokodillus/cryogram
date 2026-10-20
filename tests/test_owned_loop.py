@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
 
 from tests import _bootstrap
 from tests._bootstrap import workflow as _workflow
@@ -111,10 +112,9 @@ class SecondOpinionIsGoneTest(unittest.TestCase):
     def test_the_ground_truths_live_in_the_policy(self):
         from agent import skills
         policy = skills.policy_text()
-        self.assertIn("You can store a value the user gives you", policy)
-        self.assertIn("The user's own files are within reach", policy)
-        self.assertIn("A line never carries data", policy)
-        self.assertIn("shows the site saying it", policy)
+        for sid in ("00-what-cryogram-is", "03-starting-the-work", "07-what-a-plan-contains"):
+            body = skills.read_static(sid)["content"].strip()
+            self.assertEqual(policy.count(body), 1)
 
 class SdkBuilderTest(unittest.TestCase):
     def test_run_turn_always_uses_the_sdk_driver(self):
@@ -287,7 +287,7 @@ class ResultContractTest(unittest.TestCase):
                               lambda e: None)
         self.assertTrue(env["ok"], env)
         self.assertTrue(p["plan"]["nodes"])
-        self.assertTrue(any("what it changes there" in g
+        self.assertTrue(any("changes something outside" in g
                             for g in p["plan"]["design_gaps"]))
         self.assertIn("design gaps",
                       node_tools.tool_build_workflow(p).get("error", ""))
@@ -544,6 +544,43 @@ class CardPauseTest(unittest.TestCase):
             actions._approve(p, lambda ev: None, "Open it?", "", "", step="other",
                              holds="window", domain="another.test")
             self.assertEqual(len(asked), 2)
+
+    def test_a_step_that_may_need_you_asks_if_you_are_ready_for_every_window(self):
+        from unittest import mock
+        from agent import interactions, transcript, gate
+        self.assertTrue(gate.asks_person('confirm_with_user("Log in", page)'))
+        self.assertFalse(gate.asks_person('browser_goto(page, "https://x.test")'))
+        p = _workflow([], pid="p_ready")
+        p["approval_grants"] = [{"kind": "window", "domain": "example.test",
+                                 "always": True, "title": "t"},
+                                {"step": "Log in", "title": "Something for you to do"}]
+        asked = []
+
+        def _wait(iid, timeout=600, **kw):
+            interactions._pending.pop(iid, None)
+            asked.append(iid)
+            return "allow"
+        env = {"needs_browser_ok": "Log in", "domain": "example.test", "needs_person": True}
+        with mock.patch.object(interactions, "wait_sync", _wait):
+            for _ in range(2):
+                actions._cell_approvals(p, lambda ev: None, lambda *a, **k: {"ok": True},
+                                        {"name": "Log in", "reason": "log in"}, dict(env))
+            self.assertEqual(len(asked), 2)
+            card = [i for i in transcript.items(p) if i.get("kind") == "request"][-1]["payload"]
+            self.assertEqual(card.get("holds"), "ready")
+            self.assertIn("when you're ready", card["scope"])
+            actions._approve(p, lambda ev: None, "Something for you to do", "", "",
+                             step="Log in", holds="person")
+            self.assertEqual(len(asked), 3)
+
+        p["approval_grants"] = [{"step": "Log in", "title": "x", "kind": "ready"}]
+        with mock.patch.object(interactions, "wait_sync", _wait):
+            actions._approve(p, lambda ev: None, "Send?", "", "", step="Log in", holds="send")
+            self.assertEqual(len(asked), 4)
+            self.assertEqual(actions._approve(p, lambda ev: None, "Open?", "", "",
+                                              step="Log in", holds="ready"), "allow")
+            self.assertEqual(len(asked), 4)
+        self.assertEqual(p["approval_grants"], [])
 
     def test_an_empty_or_stub_question_is_refused(self):
         p = _workflow([], pid="p_pause9")
@@ -895,6 +932,8 @@ class EgressDomainFoldTest(unittest.TestCase):
         p["plan"] = {"status": "draft", "nodes": [
             {"name": "Save to sheet", "type": "connector",
              "domains": ["oauth2.googleapis.com", "sheets.googleapis.com"]}]}
+        from storage import store
+        store.save(p)
         blocked = {"ok": False, "error": "<urlopen error egress blocked: ('oauth2.googleapis.com', 443) is not on the allowlist>"}
         calls = {"n": 0}
 
@@ -930,6 +969,9 @@ class EgressApprovalExpiryTest(unittest.TestCase):
 
         from agent import interactions
         p = _workflow([], pid="p_appr")
+        from storage import store
+        p["plan"] = {"nodes": [{"name": "Save", "type": "connector"}]}
+        store.save(p)
         blocked = {"ok": False, "error": "<urlopen error egress blocked: ('oauth2.googleapis.com', 443) is not on the allowlist>"}
         events = []
 
@@ -1241,6 +1283,9 @@ class CellApprovalLoopTest(unittest.TestCase):
 
         from agent import interactions
         p = _workflow([], pid="p_apprloop")
+        from storage import store
+        p["plan"] = {"nodes": [{"name": "Save", "type": "connector"}]}
+        store.save(p)
         seq = list(results)
         calls = []
 
@@ -1300,6 +1345,9 @@ class BrowserRelaunchApprovalTest(unittest.TestCase):
 
         from agent import interactions
         p = _workflow([], pid="p_browser_appr")
+        from storage import store
+        p["plan"] = {"nodes": [{"name": "Fetch posts", "type": "browser"}]}
+        store.save(p)
         seen = []
 
         def _cell(workflow, **kw):
@@ -1398,6 +1446,68 @@ def _log_rows(pid, kind):
     return rows
 
 class TurnTelemetryTest(unittest.TestCase):
+    def _timer(self, clock, lines, started=0.0):
+        from agent import loop
+        return loop.CallTimer(lines.append, lambda: clock[0], started, ctx_of=lambda: 1234)
+
+    def test_a_call_says_how_long_it_waited_thought_and_wrote(self):
+        clock, lines = [0.0], []
+        timer = self._timer(clock, lines)
+        clock[0] = 10.0
+        timer.tool_returned()
+        def at(s, ev):
+            clock[0] = s
+            timer.event(ev)
+        at(40.0, {"type": "message_start", "message": {"usage": {}}})
+        at(45.0, {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}})
+        at(300.0, {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "abcd"}})
+        at(345.0, {"type": "content_block_stop", "index": 0})
+        at(346.0, {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "name": "run_cell"}})
+        at(400.0, {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"code\": 1}"}})
+        at(406.0, {"type": "content_block_stop", "index": 1})
+        at(406.5, {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 900}})
+        at(407.0, {"type": "message_stop"})
+        self.assertEqual(lines, [{"call": 1, "waited_s": 30.0, "first_out_s": 5.0, "total_s": 367.0,
+                                  "thinking_s": 300.0, "tool_input_s": 60.0,
+                                  "thinking_chars": 4, "tool_input_chars": 11,
+                                  "output_tokens": 900, "stop_reason": "tool_use", "ctx": 1234}])
+
+    def test_a_tool_waiting_on_a_card_is_not_counted_as_the_call(self):
+        clock, lines = [0.0], []
+        timer = self._timer(clock, lines)
+        def at(s, ev):
+            clock[0] = s
+            timer.event(ev)
+        at(1.0, {"type": "message_start", "message": {"usage": {}}})
+        at(2.0, {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "name": "save_plan"}})
+        clock[0] = 12.0
+        timer.tool_started()
+        at(292.0, {"type": "content_block_stop", "index": 0})
+        at(293.0, {"type": "message_stop"})
+        self.assertEqual(lines[0]["tool_input_s"], 10.0)
+        self.assertEqual(lines[0]["total_s"], 11.0)
+
+    def test_a_call_open_when_the_turn_ends_is_written_as_unfinished(self):
+        clock, lines = [0.0], []
+        timer = self._timer(clock, lines)
+        clock[0] = 5.0
+        timer.event({"type": "message_start", "message": {"usage": {}}})
+        clock[0] = 600.0
+        timer.finish(unfinished=True)
+        self.assertEqual(lines[0]["total_s"], 595.0)
+        self.assertIsNone(lines[0]["first_out_s"])
+        self.assertTrue(lines[0]["unfinished"])
+        timer.finish(unfinished=True)
+        self.assertEqual(len(lines), 1)
+
+    """THE GAUGE WAS WIRED TO GROUND. `rounds` counted
+    AssistantMessages, which arrive one per CONTENT BLOCK - so one response
+    emitting text plus three parallel tool calls read as four rounds, and
+    `multi_rounds` (a round carrying >1 tool) could never fire at all. The
+    audited build logged 78 rounds for ~38 real calls and reported ZERO
+    batching while three load_skill calls landed 0.17s apart. A model call
+    now comes off the wire's own `message_start`."""
+
     def test_message_start_is_the_call_boundary(self):
         from agent import transport
         self.assertIsNone(transport._call_start_usage(
@@ -1624,6 +1734,17 @@ class BuilderCwdTest(unittest.TestCase):
 
         self.assertEqual(kw["extra_args"], {"no-session-persistence": None})
 
+    def test_claude_codes_own_log_goes_to_a_file_per_turn_and_is_scrubbed(self):
+        from agent import chatlog, loop
+        path = chatlog.program_log_path("wfl_proglog")
+        self.assertTrue(path.endswith(".log"))
+        self.assertIn("wfl_proglog.builder", path)
+        kw = loop.sdk_option_kwargs("sys", object(), [], [], None, {}, None, debug_file=path)
+        self.assertEqual(kw["extra_args"], {"no-session-persistence": None, "debug-file": path})
+        Path(path).write_text("[API REQUEST] tool said s3cr3t-value-123\n")
+        chatlog.redact("wfl_proglog", "s3cr3t-value-123", "[secret]")
+        self.assertNotIn("s3cr3t-value-123", Path(path).read_text())
+
     def test_sdk_cwd_is_outside_the_checkout(self):
         import config
         from agent import loop
@@ -1668,6 +1789,9 @@ class FolderApprovalTest(unittest.TestCase):
 
         from agent import interactions
         p = _workflow([], pid=f"p_fold_{decision or 'none'}")
+        from storage import store
+        p["plan"] = {"nodes": [{"name": "Read it", "type": "code"}]}
+        store.save(p)
         blocked = {"ok": False, "error": "PermissionError: path blocked: '/Users/me/Documents/reports/q3.csv' is outside this workflow's allowed folders"}
         calls = {"n": 0}
 
@@ -1736,3 +1860,115 @@ class ClosingMessageRepeatsNothingTest(unittest.TestCase):
         m.text("Only this.")
         self.assertEqual(loop.turn_ending(m.tail())["content"], "Only this.")
         loop._NARRATORS.pop("p_tail1", None); loop._NARRATORS.pop("p_tail2", None)
+
+class ListCountCheckTest(unittest.TestCase):
+    def _wf(self, pid, inputs=None):
+        p = _workflow([], pid=pid)
+        p["plan"] = {"nodes": [{
+            "id": "collect", "name": "Collect threads", "type": "browser",
+            "read_only": True, "url": "https://example.com", "max_setting": "max_threads",
+            "inputs": inputs or [{"name": "max_threads", "type": "number"}],
+            "outputs": [{"name": "threads", "type": "list"}]}], "edges": []}
+        return p
+
+    def _check(self, p, found, limit, code="x = 1", answer=None):
+        from unittest import mock
+        args = {"name": "Collect threads", "code": code, "inputs": {"max_threads": limit}}
+        result = {"ok": True, "output": {"threads": [{"n": i} for i in range(found)]}}
+        with mock.patch.object(actions, "_raise_card",
+                               return_value=("i1", {}, answer)) as raised:
+            out = actions._list_count_check(p, args, result)
+        return out, raised
+
+    def test_exactly_the_maximum_gets_a_note_and_no_card(self):
+        out, raised = self._check(self._wf("p_lc1"), 5, 5)
+        raised.assert_not_called()
+        self.assertIn("exactly the maximum", out["note"])
+
+    def test_fewer_than_the_maximum_asks_and_a_no_goes_back(self):
+        out, raised = self._check(self._wf("p_lc2"), 19, 25, answer={"text": actions.COUNT_NO})
+        raised.assert_called_once()
+        question = raised.call_args[0][2]["question"]
+        self.assertIn('"Collect threads" found 19 threads', question)
+        self.assertIn("expects more than 19", out["note"])
+
+    def test_nothing_found_is_the_builders_to_fix_not_a_question(self):
+        out, raised = self._check(self._wf("p_lc5"), 0, 6)
+        raised.assert_not_called()
+        self.assertIn("found no threads at all", out["note"])
+
+    def test_a_yes_is_kept_for_the_step(self):
+        p = self._wf("p_lc3")
+        out, raised = self._check(p, 19, 25, answer={"text": actions.COUNT_YES})
+        self.assertIn("confirmed", out["note"])
+        out, raised = self._check(p, 19, 25, answer={"text": actions.COUNT_YES})
+        raised.assert_not_called()
+
+    def test_a_no_is_kept_for_the_same_count_and_asked_again_when_it_changes(self):
+        p = self._wf("p_lc6")
+        self._check(p, 19, 25, answer={"text": actions.COUNT_NO})
+        out, raised = self._check(p, 19, 25, answer={"text": actions.COUNT_NO})
+        raised.assert_not_called()
+        self.assertIn("already said is too low", out["note"])
+        out, raised = self._check(p, 22, 25, answer={"text": actions.COUNT_NO})
+        raised.assert_called_once()
+
+    def test_a_count_answer_never_answers_a_window_or_send_card(self):
+        p = self._wf("p_lc7")
+        p["approval_grants"] = [{"kind": "list-count", "step": "Collect threads"},
+                                {"kind": "list-count-no", "step": "Collect threads", "count": 3}]
+        from unittest import mock
+        with mock.patch.object(actions, "_raise_card", return_value=("i1", {}, None)) as raised:
+            actions._approve(p, lambda e: None, "Open the window?", "why", "scope",
+                             step="Collect threads", holds="window")
+        raised.assert_called_once()
+
+    def test_a_step_working_through_a_handed_list_is_not_counted(self):
+        p = self._wf("p_lc4", inputs=[{"name": "people", "type": "list"},
+                                       {"name": "max_threads", "type": "number"}])
+        out, raised = self._check(p, 1, 2, code="for x in read_input('people'):\n    pass")
+        raised.assert_not_called()
+        self.assertNotIn("note", out)
+
+class OneCardWaitingAtATimeTest(unittest.TestCase):
+    def test_a_second_card_is_not_raised_while_one_waits(self):
+        from agent import interactions, turnstate
+        p = _workflow([], pid="p_one_card")
+        iid = interactions.create_sync("ask", {"workflow_id": p["id"], "question": "q"})
+        try:
+            got = actions._raise_card(p, "ask", {"question": "again?"}, "ask",
+                                      {"question": "again?"}, "ask")
+            self.assertEqual(got, (None, None, None))
+            self.assertTrue(turnstate.of(p).ask_open)
+            self.assertFalse(any(it.get("kind") == "request" and
+                                 (it.get("payload") or {}).get("question") == "again?"
+                                 for it in p.get("transcript") or []))
+        finally:
+            interactions.park_workflow(p["id"])
+
+    def test_a_card_left_waiting_is_parked_when_the_turn_ends(self):
+        from unittest import mock
+        from agent import interactions
+        p = _workflow([], pid="p_park_end")
+        def turn(*a, **k):
+            interactions.create_sync("ask", {"workflow_id": p["id"], "question": "q"})
+            return {"content": "", "kind": "text"}
+        with mock.patch.object(loop, "_run_turn_sdk", side_effect=turn):
+            loop.run_turn(p, "hi", tr=object())
+        self.assertEqual(interactions.pending(p["id"]), [])
+
+    def test_a_card_wait_counts_time_asleep(self):
+        from unittest import mock
+        import time as _t
+        from agent import interactions
+        iid = interactions.create_sync("ask", {"workflow_id": "p_wall", "question": "q"})
+        real = _t.time
+        calls = {"n": 0}
+        def jumpy():
+            calls["n"] += 1
+            return real() + (10_000 if calls["n"] > 1 else 0)
+        with mock.patch.object(_t, "time", jumpy):
+            t0 = _t.monotonic()
+            got = interactions.wait_sync(iid, timeout=5)
+        self.assertIsNone(got)
+        self.assertLess(_t.monotonic() - t0, 2)

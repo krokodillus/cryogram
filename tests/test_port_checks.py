@@ -848,6 +848,117 @@ class AskThePersonInTheWindowTest(unittest.TestCase):
                       on_user_request=lambda m: "unanswered")
         self.assertEqual(cm.exception.kind, "NobodyAnsweredError")
 
+class WriteFileTakesTheNameFirstTest(unittest.TestCase):
+    def test_contents_in_the_names_place_are_refused(self):
+        from runtime import capability
+        for name in (b"date,amount\n1,2\n", "date,amount\n1,2\n", "x" * (capability.FILE_NAME_MAX + 1)):
+            with self.subTest(name=str(name)[:20]):
+                with self.assertRaises(TypeError) as cm:
+                    capability.write_file(name, "report.csv")
+                self.assertIn("name first", str(cm.exception))
+
+    def test_the_swapped_call_fails_a_step_with_the_sentence(self):
+        from runtime import sandbox
+        with self.assertRaises(sandbox.NodeError) as cm:
+            sandbox.run("ref = write_file(b'date,amount\\n1,2\\n', 'report.csv')\n"
+                        "write_output('f', ref)", None, {}, {})
+        self.assertIn("name first", str(cm.exception))
+
+    def test_the_right_order_still_stores_the_contents(self):
+        from runtime import sandbox
+        out = sandbox.run("write_output('f', write_file('report.csv', 'date,amount\\n1,2\\n'))",
+                          None, {}, {})
+        from storage import blobstore
+        self.assertEqual(blobstore.get(out["f"]), b"date,amount\n1,2\n")
+
+class BinaryMeansBytesTest(unittest.TestCase):
+    def test_an_inline_text_value_comes_back_as_bytes(self):
+        from runtime import sandbox
+        out = sandbox.run("write_output('n', len(read_input('f', binary=True).decode('utf-8')))",
+                          None, {"f": "date,amount\n1,2\n"}, {})
+        self.assertEqual(out["n"], 16)
+
+class CheckpointValuesAreAListTest(unittest.TestCase):
+    def test_the_values_come_back_in_the_order_they_were_recorded(self):
+        import os
+        import tempfile
+        from runtime import capability
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["CRYOGRAM_CHECKPOINT_FILE"] = os.path.join(d, "ckpt.json")
+            try:
+                self.assertEqual(capability.checkpoint_values(), [])
+                for key in ("b", "a", "c"):
+                    capability.checkpoint(key, {"id": key})
+                capability.checkpoint("a", {"id": "a", "again": True})
+                self.assertEqual(capability.checkpoint_values(),
+                                 [{"id": "b"}, {"id": "a", "again": True}, {"id": "c"}])
+
+                self.assertEqual(capability.checkpoint_values(["c", "x", "b"]),
+                                 [{"id": "c"}, {"id": "b"}])
+            finally:
+                os.environ.pop("CRYOGRAM_CHECKPOINT_FILE", None)
+
+    def test_it_is_on_the_cell_surface(self):
+        from runtime import contracts
+        from agent import gate
+        self.assertIn("checkpoint_values", contracts.surface())
+        self.assertIn("checkpoint_values", gate.RESERVED_NAMES)
+
+    def test_a_list_output_given_checkpoints_is_told_the_fix(self):
+        from agent.cell_gates import _checkpoints_hint
+        ports = [{"name": "sent", "type": "list"}]
+        code = "done = checkpoints()\nwrite_output('sent', checkpoints())\n"
+        hint = _checkpoints_hint(ports, {"sent": {"1": {"id": 1}}}, code)
+        self.assertIn("checkpoint_values(keys)", hint)
+        self.assertIn('"sent"', hint)
+
+        self.assertEqual(_checkpoints_hint(ports, {"sent": {"1": 1}}, "write_output('sent', {})"), "")
+        self.assertEqual(_checkpoints_hint(ports, {"sent": [1]}, code), "")
+
+class TheWindowComesToTheFrontTest(unittest.TestCase):
+    class _Page:
+        def __init__(self):
+            self.calls = []
+        def bring_to_front(self):
+            self.calls.append("front")
+        def is_closed(self):
+            return False
+
+    def _ask(self, answer):
+        import os, tempfile, threading, time
+        from unittest.mock import patch
+        from runtime import capability
+        page, order = self._Page(), []
+        req = os.path.join(tempfile.mkdtemp(), "request")
+        def person():
+            deadline = time.time() + 5
+            while time.time() < deadline and not os.path.exists(req):
+                time.sleep(0.02)
+            with open(req + ".answer", "w") as f:
+                f.write(answer)
+        threading.Thread(target=person, daemon=True).start()
+        with patch.dict(os.environ, {"CRYOGRAM_REQUEST_FILE": req}), \
+                patch.object(capability, "_front_app", lambda: "Microsoft Edge"), \
+                patch.object(capability, "_window_on_screen",
+                             lambda p, show: order.append("on" if show else "off")), \
+                patch.object(capability, "_hand_focus_back",
+                             lambda app: order.append(f"back:{app}")), \
+                patch.object(capability, "_back_where_it_meant_to_be", lambda p: None):
+            try:
+                capability.confirm_with_user("Log in, then confirm", page)
+            except capability.NobodyAnsweredError:
+                order.append("nobody")
+        return page, order
+
+    def test_raised_for_the_ask_and_focus_handed_back_on_the_confirm(self):
+        page, order = self._ask("done")
+        self.assertEqual(page.calls, ["front"])
+        self.assertEqual(order, ["on", "off", "back:Microsoft Edge"])
+
+    def test_focus_goes_back_when_nobody_answered_too(self):
+        page, order = self._ask("gone")
+        self.assertEqual(order, ["on", "off", "back:Microsoft Edge", "nobody"])
+
 class ClosedWindowIsAPauseTest(unittest.TestCase):
     def setUp(self):
         from runtime import run_state
@@ -1061,7 +1172,8 @@ class WhatTheWindowSawTest(unittest.TestCase):
         self.assertEqual(len(out["calls"]), 1)
         self.assertEqual(out["calls"][0]["count"], 900)
         self.assertEqual(out["calls"][0]["ids"], list(range(900)))
-        self.assertIn("unfold", out["calls"][0]["note"])
+        self.assertIn("read_input(\"calls\", ids=[...])", out["calls_note"])
+        self.assertNotIn("note", out["calls"][0])
         self.assertEqual(out["calls_total"], 900)
         self.assertNotIn("calls_listed", out)
         whole = _json.loads(blobstore.get(out["calls_file"]).decode())
@@ -1118,13 +1230,39 @@ class FoldedListingTest(unittest.TestCase):
         self.assertEqual(feed["ids"], [0, 2, 4])
         self.assertEqual(feed["count"], 3)
         self.assertEqual(feed["interval"], 5.0)
-        self.assertIn("unfold", feed["note"])
+        self.assertNotIn("note", feed)
+        self.assertEqual(feed["pattern"], "https://x.com/api/feed")
         me = next(r for r in rows if r.get("url") == "https://x.com/api/me")
         self.assertEqual(me["id"], 5)
         images = next(r for r in rows if r.get("kind") == "image")
         self.assertEqual((images["count"], images["ids"], images["bytes"]), (2, [1, 3], 30))
-        self.assertIn('kind="image"', images["note"])
         self.assertEqual(sum(r.get("count", 1) for r in rows), len(self.CALLS))
+
+    def test_a_page_file_or_a_check_is_never_a_data_call(self):
+        from runtime import capability
+        calls = [{"method": "HEAD", "url": f"https://static.x.com/sc/h/{c}", "status": 200,
+                  "kind": "xhr", "type": "text/css"} for c in ("ab", "cd")]
+        calls += [{"method": "GET", "url": "https://static.x.com/app.js", "status": 200,
+                   "kind": "xhr", "type": "text/javascript"},
+                  {"method": "GET", "url": "https://x.com/api/feed", "status": 200,
+                   "kind": "xhr", "type": "application/json"}]
+        rows = capability.fold_calls(calls)
+        self.assertEqual([r.get("url") for r in rows if "url" in r], ["https://x.com/api/feed"])
+        kinds = {r["kind"]: r["ids"] for r in rows if "url" not in r}
+        self.assertEqual(kinds, {"check": [0, 1], "script": [2]})
+
+    def test_bot_defence_and_analytics_fold_into_one_tracking_row(self):
+        from runtime import capability
+        calls = [{"method": "POST", "url": "https://li.protechts.net/api/v2?uc=scraping", "status": 200,
+                  "kind": "xhr", "type": "application/json"},
+                 {"method": "GET", "url": "https://www.google-analytics.com/g/collect", "status": 204,
+                  "kind": "fetch", "type": ""},
+                 {"method": "GET", "url": "https://www.linkedin.com/voyager/api/messaging", "status": 200,
+                  "kind": "xhr", "type": "application/json"}]
+        rows = capability.fold_calls(calls)
+        self.assertEqual([r.get("url") for r in rows if "url" in r],
+                         ["https://www.linkedin.com/voyager/api/messaging"])
+        self.assertEqual(next(r for r in rows if r.get("kind") == "tracking")["ids"], [0, 1])
 
     def test_the_calls_file_and_the_recording_read_with_filters(self):
         from runtime import capability

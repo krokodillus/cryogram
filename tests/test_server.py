@@ -254,7 +254,7 @@ class NodeModelRouteTest(unittest.TestCase):
         settings.update({"providers": [
             {"id": "p_tt", "name": "Tune", "adapter": "anthropic", "auth": "api-key",
              "use": "workflow", "key_name": "TT_KEY", "tags": [],
-             "models": [{"name": "tune-model"}, {"name": "picky", "no_temperature": True}]}]})
+             "models": [{"name": "tune-model"}, {"name": "picky", "refuses": ["temperature"]}]}]})
         secrets_store.set_secret("TT_KEY", "k", secrets_store.OWNER_APP)
         wf = store.load(self.pid)
         wf["plan"] = {"nodes": [{"id": "n_ai", "name": "judge", "type": "ai",
@@ -2070,14 +2070,17 @@ class InterjectionTest(unittest.TestCase):
                   headers={"Content-Type": "application/json"})
         c.close()
 
-    def test_delivered_shown_and_read_at_the_tool_boundary(self):
-        import threading, time as _t
+    def test_typed_words_are_shown_at_once_and_kept_for_the_followup_turn(self):
+        import time as _t
         import turns
         from unittest.mock import patch
         from agent import orchestrator, actions
         seen = {}
 
         def fake_turn(workflow, message, emit):
+            if "note" in seen:
+                seen["followup"] = message
+                return {"content": "ok", "kind": "text"}
             emit({"type": "tool", "text": "working"})
             deadline = _t.time() + 10
             while _t.time() < deadline and not turns.unread_interjections(workflow["id"]):
@@ -2086,8 +2089,9 @@ class InterjectionTest(unittest.TestCase):
             emit({"type": "tool", "text": "still working"})
 
             out = actions.execute(workflow, {"name": "list_nodes", "input": {}}, emit)
+            seen["stop_asked"] = turns.should_stop(workflow["id"])
             seen["note"] = out.get("user_said_meanwhile", "")
-            return {"content": "done", "kind": "text"}
+            return {"content": "", "kind": "text", "stopped": True}
 
         with patch.object(orchestrator, "_master_key", return_value=("k", "n")), \
                 patch.object(orchestrator, "handle_chat_stream", fake_turn):
@@ -2100,21 +2104,20 @@ class InterjectionTest(unittest.TestCase):
                                    "text": "actually use the other page"})
             self.assertEqual(status, 200)
             self.assertEqual(d.get("landed"), "parked", d)
+            deadline = _t.time() + 15
+            while _t.time() < deadline and "followup" not in seen:
+                _t.sleep(0.05)
             deadline = _t.time() + 10
             while _t.time() < deadline and turns.snapshot(self.pid).get("active"):
                 _t.sleep(0.05)
-        self.assertIn("actually use the other page", seen.get("note", ""))
-        snap = turns.snapshot(self.pid)
-        shown = [e for e in snap["events"] if e.get("type") == "shown"
-                 and (e.get("item") or {}).get("from") == "user"]
-        landed = [e for e in shown if "other page" in (e["item"].get("text") or "")]
-        self.assertTrue(landed)
-        self.assertEqual(landed[0]["item"].get("cid"), "c-inter1")
-        done = [e for e in snap["events"] if e.get("type") == "done"][-1]
-        self.assertNotIn("unread", done)
+        self.assertTrue(seen.get("stop_asked"))
+        self.assertEqual(seen.get("note"), "")
+        self.assertEqual(seen.get("followup"), "actually use the other page")
         from storage import store
-        texts = [it.get("text") for it in store.load(self.pid).get("transcript", [])]
-        self.assertEqual(texts.count("actually use the other page"), 1)
+        items = store.load(self.pid).get("transcript", [])
+        mine = [it for it in items if it.get("text") == "actually use the other page"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0].get("cid"), "c-inter1")
 
     def test_unread_starts_a_server_side_followup_turn(self):
         import time as _t

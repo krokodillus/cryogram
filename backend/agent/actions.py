@@ -32,14 +32,14 @@ def _json_schema(spec_schema: dict, fn: Callable) -> dict:
     props = {k: (t if isinstance(t, dict) else {"type": _PY_TO_JSON.get(t, "string")})
              for k, t in (spec_schema or {}).items()}
     req = [r for r in _fn_required(fn) if r in props]
-    return {"type": "object", "properties": props, "required": req}
+    return {"type": "object", "properties": props, "required": req, "additionalProperties": False}
 
 _LOAD_SKILL_TOOL = {
     "name": "load_skill",
-    "description": ("Load one situational skill/guide into context by id BEFORE acting on its subject: connector guides (e.g. a specific external tool), method patterns, and learning-* - what earlier builds found out, whose titles name the situation they apply to. The system prompt lists every id with WHEN it applies. A loaded guide may name its own REFERENCE documents (id \"<guide>/<ref>\") with when-to-load lines - load one the moment its condition holds, never guess its content."),
+    "description": ("Load one guide by its id before you act on its subject: a guide for an outside service, a guide on how to do something, or a learning-* (something an earlier build found out; its title names the situation it applies to). The system prompt lists every id with WHEN it applies. A guide may name its own reference documents (id \"<guide>/<ref>\"), each with a line saying when to load it: load one as soon as that holds, and never guess what it says."),
     "input_schema": {"type": "object",
                      "properties": {"id": {"type": "string"}},
-                     "required": ["id"]}}
+                     "required": ["id"], "additionalProperties": False}}
 
 # The tool spec table the schemas and handlers both derive from
 def _specs() -> list[tuple]:
@@ -90,6 +90,13 @@ def _internal_words(text: str) -> list[str]:
 def _raise_card(workflow: dict, request_kind: str, payload: dict,
                 interaction_kind: str, interaction_payload: dict, prefix: str):
     import turns as _turns
+
+    if interactions.pending(workflow.get("id")):
+        from agent import chatlog
+        chatlog.append(workflow.get("id") or "", "card-already-waiting",
+                       {"kind": request_kind, "title": str(payload.get("title") or payload.get("question") or "")})
+        turnstate.of(workflow).ask_open = True
+        return None, None, None
     pre = _turns.flush_text(workflow.get("id") or "")
     if pre:
         _transcript.append_message(workflow, "assistant", pre)
@@ -240,6 +247,9 @@ def _load_skill(workflow: dict, sid: str) -> dict:
     got = read_skill_or_learning(sid)
     if got is None:
         return {"error": f"no skill {sid!r} - the system prompt lists the ids"}
+    if skills.read_static(sid) is not None and (got.get("meta") or {}).get("kind") != "policy":
+        from agent import active_skills
+        active_skills.register(workflow.get("id") or "", sid, got)
 
     return {"ok": True, "id": sid, "content": got.get("content") or ""}
 
@@ -258,6 +268,85 @@ def _result_ok(result: dict) -> bool:
         return False
     return result.get("ok", True) is not False
 
+COUNT_YES = "Yes, that's about right"
+COUNT_NO = "No, there should be more"
+
+# After a browser step's try reads a list from a page, says when the try proved nothing about loading more, and asks the person when it came back short
+def _list_count_check(workflow: dict, args: dict, result: dict) -> dict:
+    if not (isinstance(result, dict) and result.get("ok")) or result.get("duplicate"):
+        return result
+    from models import step_type
+    step = steps.step_by_ref(workflow, workflow.get("plan"), args.get("name"))
+    if not step or step_type(step) != "browser" or not step.get("read_only"):
+        return result
+    ms = str(step.get("max_setting") or "").strip()
+    if not ms:
+        return result
+    from runtime.executor import iterated_input_names
+    lists_in = {p.get("name") for p in step.get("inputs") or [] if p.get("type") == "list"}
+    if lists_in & iterated_input_names(str(args.get("code") or "")):
+        return result
+    given = (args.get("inputs") or {}).get(ms) if isinstance(args.get("inputs"), dict) else None
+    if given is None:
+        given = next((v.get("value") for v in workflow.get("variables") or []
+                      if v.get("name") == ms), None)
+    try:
+        limit = int(given)
+    except (TypeError, ValueError):
+        return result
+    out = result.get("output") if isinstance(result.get("output"), dict) else {}
+    port = next((p for p in step.get("outputs") or []
+                 if p.get("type") == "list" and isinstance(out.get(p.get("name")), list)), None)
+    if not port or limit <= 0:
+        return result
+    found = len(out[port["name"]])
+    what = str(port.get("label") or steps.humanise_name(port["name"])).lower()
+    sname = step.get("name") or args.get("name")
+    if found >= limit:
+        note = (f"it returned exactly the maximum it was passed ({limit} {what}): if that "
+                "is not above what the page shows before any scrolling, this try never showed the page loading more - try again with a maximum above the first screen's count")
+        return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
+    if found == 0:
+        note = (f"it found no {what} at all: the step is not reading the list yet - check "
+                "the page copy and the recording for where the items are before trying again")
+        return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
+    sid = step.get("id") or sname
+    if _kept_grant(workflow, "list-count", sid):
+        return result
+
+    said_no = next((g for g in reversed(workflow.get("approval_grants") or [])
+                    if g.get("kind") == "list-count-no" and g.get("step") == sid), None)
+    if said_no and said_no.get("count") == found:
+        note = (f"it still found {found} {what}, the count the person already said is too "
+                "low: the step is not reading more of the list yet - work out how the page loads more before trying again")
+        return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
+    question = (f'"{sname}" found {found} {what}, fewer than the {limit} it was allowed '
+                "to collect, so the page showed no more than that. Is that about how many you expect?")
+    options = [COUNT_YES, COUNT_NO]
+    iid, entry, answer = _raise_card(
+        workflow, "ask", {"question": question, "options": options, "secret": False,
+                          "secret_name": "", "upload": False, "folder": False},
+        "ask", {"question": question, "options": options}, "ask")
+    if answer is None:
+        turnstate.of(workflow).ask_open = True
+        return {**result, "note": " ".join(x for x in (result.get("note"),
+                "the person is asked whether this count is right") if x)}
+    text = str(answer.get("text") if isinstance(answer, dict) else answer or "").strip()
+    if text == COUNT_YES:
+        workflow.setdefault("approval_grants", []).append(
+            {"kind": "list-count", "step": sid, "count": found, "ts": _time.time()})
+        steps.save(workflow)
+        said = f"the person confirmed {found} {what} is about what they expect"
+    elif text == COUNT_NO:
+        workflow.setdefault("approval_grants", []).append(
+            {"kind": "list-count-no", "step": sid, "count": found, "ts": _time.time()})
+        steps.save(workflow)
+        said = (f"the person expects more than {found} {what}: the page did not load more "
+                "while this step ran - work out how it loads more (scroll the list as a person does, and look in the recording for the request the page makes for its next batch) and try the step again")
+    else:
+        said = f"the person answered about the count of {found} {what}: {text}"
+    return {**result, "note": " ".join(x for x in (result.get("note"), said) if x)}
+
 # Raises an approval card and waits; a decline is recorded and respected, never retried around
 def _kept_grant(workflow: dict, holds: str, key: str) -> dict | None:
     field = "domain" if holds == "window" else "step"
@@ -267,11 +356,17 @@ def _kept_grant(workflow: dict, holds: str, key: str) -> dict | None:
 def _approve(workflow: dict, emit, title: str, detail: str, scope: str,
              step: str = "", step_id: str = "", repeat: bool = False,
              code_key: str = "", holds: str = "", domain: str = ""):
-    grants = workflow.get("approval_grants") or []
+    grants = [] if holds == "person" else (workflow.get("approval_grants") or [])
     for g in list(grants):
         if g.get("kind") == "window":
             if holds == "window" and domain and g.get("domain") == domain and g.get("always"):
                 return "allow"
+            continue
+
+        if str(g.get("kind") or "").startswith("list-count"):
+            continue
+
+        if (g.get("kind") == "ready") != (holds == "ready"):
             continue
         if (step and g.get("step") == step) \
                 or (not step and title and g.get("title") == title):
@@ -313,9 +408,25 @@ NO_IS_FINE = ("Saying no is fine too: the step is still built either way, just n
 
 NO_MEANS_UNSEEN = ("If you say no, I'll work out this step without looking at the page, and your first run will show whether it works.")
 
+WINDOW_NEEDS_YOU = ("You may need to do something in the window, such as logging in. It opens when you say yes, so say yes when you're ready.")
+
 WINDOW_SENDS = ("This step sends something on the site, so I'll ask before each window it opens.")
 
 NO_MEANS_EARLIER_SEND = ("Saying no means the earlier send stays the step's test: the changed code goes untested until your first real run, which sends it behind its own approval.")
+
+# A try of a step the approved change does not name widens the change, shows the card again and runs on the click
+def _widen_change(workflow: dict, emit, fn, args: dict, result: dict) -> dict:
+    steps.widen_change(workflow, str(result["widen_change"]), str(args.get("reason") or ""))
+    steps.save(workflow)
+    card = _opening_card_owned(workflow, emit)
+    if card.get("plan_shown") == "approved":
+        from agent import chatlog
+        chatlog.append(workflow["id"], "change-widened", {"step": result["widen_change"]})
+        return fn(workflow, **args)
+    if card.get("plan_shown") == "waiting":
+        return {"ok": True, "parked": True}
+    return {"ok": False, "error": "the user replied on the card instead of approving the wider change",
+            **{k: v for k, v in card.items() if k != "plan_shown"}}
 
 # The four things a cell may need the user for while it runs: a browser window, a real send, a folder, an outside address - one card each, asked one way
 def _cell_approvals(workflow: dict, emit, fn, args: dict, result: dict) -> dict:
@@ -384,6 +495,8 @@ def _browser_card(workflow: dict, fn, args: dict, result: dict):
     domain = str(result.get("domain") or "").strip()
     sends = bool(result.get("sends"))
 
+    person = bool(result.get("needs_person"))
+
     def on_yes():
         r = fn(workflow, **{**args, "browser_ok": True})
         if isinstance(r, dict) and not r.get("ok") and r.get("window_opened") is False:
@@ -397,10 +510,12 @@ def _browser_card(workflow: dict, fn, args: dict, result: dict):
                   else f'Open a browser window for "{cell}"?'),
         "detail": ((f"You said no to this earlier. {again_why} " if again_why else "")
                    + why).strip(),
-        "scope": (WINDOW_SENDS + " " if sends else "") + NO_MEANS_UNSEEN,
+        "scope": ((WINDOW_NEEDS_YOU + " " if person else "")
+                  + (WINDOW_SENDS + " " if sends else "") + NO_MEANS_UNSEEN),
         "step": steps.humanise_name(str(cell)),
         "step_id": steps.step_id_for(workflow, cell),
-        **({"holds": "window", "domain": domain} if domain and not sends else {}),
+        **({"holds": "ready"} if person
+           else {"holds": "window", "domain": domain} if domain and not sends else {}),
         "on_yes": on_yes,
 
         "declined": {"ok": False, "error":
@@ -545,20 +660,71 @@ def _coerce_args(name: str, args: dict) -> dict:
             out[k] = parsed
     return out
 
+def _argument_error(name, args):
+    if not isinstance(args, dict):
+        return "input must be an object"
+    spec = next((s["input_schema"] for s in schemas() if s["name"] == name), None)
+    if spec is None:
+        return f"unknown action {name!r}"
+    props = spec.get("properties") or {}
+    unknown = sorted(set(args) - set(props))
+    if unknown:
+        return "unknown argument(s): " + ", ".join(unknown)
+    missing = [k for k in spec.get("required", []) if k not in args]
+    if missing:
+        return "missing argument(s): " + ", ".join(missing)
+    types = {"string": str, "object": dict, "array": list, "boolean": bool,
+             "integer": int, "number": (int, float)}
+    for k, value in args.items():
+        kind = props[k].get("type")
+        expected = types.get(kind) if isinstance(kind, str) else None
+        if expected and (not isinstance(value, expected) or
+                         (kind in ("integer", "number") and isinstance(value, bool))):
+            return f"{k} must be {kind}"
+    if name == "run_cell":
+        if "cells" in args:
+            if len(args) != 1 or not args["cells"]:
+                return "use cells=[...] alone, or the single name/code form, not both"
+            for i, cell in enumerate(args["cells"]):
+                if not isinstance(cell, dict) or "cells" in cell:
+                    return f"cells[{i}] must be a single cell object"
+                error = _argument_error("run_cell", cell)
+                if error:
+                    return f"cells[{i}]: {error}"
+        elif not args.get("name", "").strip():
+            return "a single cell requires a name"
+    return ""
+
 # Runs one tool call: refreshes the workflow from disk around it and hands the model anything the user said meanwhile
 def execute(workflow: dict, action: dict, emit, engine: str = "") -> dict:
-    name, args = action.get("name") or "", action.get("input") or {}
+    name, args = action.get("name") or "", action.get("input", {})
     args = _coerce_args(name, args)
-    if action.get("refused"):
-        return {"action": name, "ok": False, "error": action["refused"]}
 
     from storage import store as _store, environments as _envs
     _store.refresh_from_disk(workflow)
     notes = [_envs.changes_since(workflow)]
-    out = _execute(workflow, name, args, action, emit)
+    argument_error = _argument_error(name, args)
+    from agent import operating_context
+    phase_error = operating_context.refusal(workflow, name) if not argument_error else ""
+    if action.get("refused"):
+        out = {"action": name, "ok": False, "error": action["refused"], "failure_stage": "lifecycle"}
+    elif argument_error:
+        out = {"action": name, "ok": False, "error": "bad arguments: " + argument_error, "failure_stage": "schema"}
+    elif phase_error:
+        out = {"action": name, "ok": False, "error": phase_error, "failure_stage": "lifecycle"}
+    else:
+        out = _execute(workflow, name, args, action, emit)
+    if isinstance(out, dict) and not _result_ok(out):
+        out.setdefault("failure_stage", "tool")
 
     _store.refresh_from_disk(workflow)
     notes.append(_envs.changes_since(workflow))
+    if isinstance(out, dict):
+        out["operating_state"] = operating_context.availability(workflow)
+        delivered = args.get("id") or "" if name == "load_skill" and out.get("ok") else ""
+        guidance, _ = operating_context.supply(workflow, already_delivered=delivered)
+        if guidance:
+            out["operating_guidance"] = guidance
     env_note = " ".join(n for n in notes if n)
     if env_note and isinstance(out, dict):
         out = {**out, "environment_update": env_note}
@@ -592,7 +758,7 @@ def _execute(workflow: dict, name: str, args: dict, action: dict,
              emit) -> dict:
     over = steps.turn_over_error(workflow, name)
     if over:
-        return {"action": name, "ok": False, "error": over}
+        return {"action": name, "ok": False, "error": over, "failure_stage": "lifecycle"}
     if name == "load_skill":
         r = _load_skill(workflow, args.get("id") or "")
         ok = not r.get("error")
@@ -609,27 +775,29 @@ def _execute(workflow: dict, name: str, args: dict, action: dict,
                 "error": f"unknown action {name!r}"}
     cellish = name in ("run_cell", "run_ai_step")
 
-    cell_name = (steps.humanise_name(str(args.get("name") or ""))
-                 if cellish else "")
+    cell_name = (steps.step_name_for(workflow, str(args.get("name") or ""))
+                 if cellish and str(args.get("name") or "").strip() else "")
     if cellish and emit and cell_name:
         emit({"type": "cell", "name": cell_name, "status": "working"})
     if name == "run_cell" and emit:
         from agent import orchestrator as _mai
         base = _mai._describe_tool(workflow, "mcp__cryogram__run_cell", args)
-        steps.set_cell_progress(workflow["id"], 
-            lambda note, _b=base: emit({"type": "progress",
-                                        "text": (f"{_b} - {note}"[:180]
-                                                 + ("..." if len(f"{_b} - {note}") > 180
-                                                    else ""))}))
+
+        def _progress(note, _b=base, _cell=cell_name):
+            emit({"type": "progress", "text": f"{_b} - {note}"})
+            try:
+                from agent import chatlog
+                chatlog.append(workflow["id"], "cell-progress", {"cell": _cell, "note": str(note)})
+            except Exception:
+                pass
+        steps.set_cell_progress(workflow["id"], _progress)
     try:
         result = fn(workflow, **args)
-    except TypeError as e:
-        steps.set_cell_progress(workflow["id"], None)
-        return {"action": name, "ok": False,
-                "error": f"bad arguments: {e}"}
     except Exception as e:
         steps.set_cell_progress(workflow["id"], None)
-        return {"action": name, "ok": False, "error": f"failed: {e}"}
+        return {"action": name, "ok": False, "error": f"failed: {e}", "failure_stage": "execution"}
+    if cellish and emit and isinstance(result, dict) and result.get("widen_change"):
+        result = _widen_change(workflow, emit, fn, args, result)
 
     if name == "run_cell" and emit and isinstance(result, dict):
         if isinstance(result.get("results"), list) and isinstance(args.get("cells"), list):
@@ -637,11 +805,13 @@ def _execute(workflow: dict, name: str, args: dict, action: dict,
             for spec, r in zip(args["cells"], result["results"]):
                 if isinstance(r, dict) and isinstance(spec, dict):
                     r = _cell_approvals(workflow, emit, fn, dict(spec), r)
+                    r = _list_count_check(workflow, dict(spec), r)
                 fixed.append(r)
             result = {**result, "results": fixed,
                       "ok": all(isinstance(r, dict) and r.get("ok") for r in fixed)}
         else:
             result = _cell_approvals(workflow, emit, fn, args, result)
+            result = _list_count_check(workflow, args, result)
 
     if name == "save_plan" and turnstate.of(workflow).take("opening_card_show_now") \
             and isinstance(result, dict) and _result_ok(result):
@@ -650,6 +820,18 @@ def _execute(workflow: dict, name: str, args: dict, action: dict,
         result = {**result, **card,
                   "note": " ".join(n for n in (result.get("note"),
                                                card.get("note")) if n)}
+
+    note = turnstate.of(workflow).take("note_to_show") if name == "save_plan" else None
+    if note and isinstance(result, dict) and _result_ok(result):
+        import turns as _turns
+        pre = _turns.flush_text(workflow.get("id") or "")
+        if pre:
+            _transcript.append_message(workflow, "assistant", pre)
+        _transcript.append_message(workflow, "assistant", steps.note_lines(note))
+
+        from agent import loop as _loop
+        _loop.landed(workflow.get("id") or "")
+        steps.save(workflow)
 
     if name == "build_workflow" and isinstance(result, dict) \
             and _result_ok(result):

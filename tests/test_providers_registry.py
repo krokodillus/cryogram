@@ -321,9 +321,9 @@ class TokenUsageTest(unittest.TestCase):
         settings.update({"providers": [_wf("p_tok", "tok-model",
                                            key_name="TOK_KEY")]})
         secrets_store.set_secret("TOK_KEY", "k", secrets_store.OWNER_APP)
-        payload = {"stop_reason": "tool_use",
+        payload = {"stop_reason": "end_turn",
                    "usage": {"input_tokens": 120, "output_tokens": 45},
-                   "content": [{"type": "tool_use", "input": {"v": 1}}]}
+                   "content": [{"type": "text", "text": '{"v": 1}'}]}
         with mock.patch.object(providers.urllib.request, "urlopen",
                                lambda *a, **k: self._resp(payload)):
             res = providers.call({"model": "tok-model"}, "p", {},
@@ -427,7 +427,7 @@ class RefusedTemperatureIsStoredTest(unittest.TestCase):
             _wf("p_t3", "easy-model", key_name="T3_KEY", name="Three")]})
         for k in ("T1_KEY", "T2_KEY", "T3_KEY"):
             secrets_store.set_secret(k, "k", secrets_store.OWNER_APP)
-        providers._remember_no_temperature("picky-model")
+        providers._remember_refusal("picky-model", "temperature")
         rows = {(m["provider_id"], m["name"]): m for m in providers.node_models()}
         self.assertTrue(rows[("p_t1", "picky-model")]["no_temperature"])
         self.assertTrue(rows[("p_t2", "picky-model")]["no_temperature"])
@@ -435,4 +435,14 @@ class RefusedTemperatureIsStoredTest(unittest.TestCase):
         self.assertIsNone(providers.resolve({"model": "picky-model", "temperature": 0.5})["temperature"])
         self.assertEqual(providers.resolve({"model": "easy-model", "temperature": 0.5})["temperature"], 0.5)
         from modelcall import adapters
-        self.assertIs(adapters.remember_no_temperature, providers._remember_no_temperature)
+        self.assertIs(adapters.remember_refusal, providers._remember_refusal)
+
+    def test_the_catalogue_knows_models_that_take_no_temperature(self):
+        from storage import model_catalog
+        for name in ("gemini-3.6-flash", "gemini-3.8-flash", "gemini-4-pro", "claude-sonnet-5",
+                     "claude-opus-5-5", "gpt-5", "gpt-5.6-terra"):
+            self.assertIn("temperature", model_catalog.refuses({}, name), name)
+        for name in ("gemini-3.5-flash", "gemini-2.5-flash", "claude-haiku-4-5-20251001", "gpt-4o"):
+            self.assertEqual(model_catalog.refuses({}, name), [], name)
+        learned = {"models": [{"name": "odd-model", "refuses": ["temperature"]}]}
+        self.assertEqual(model_catalog.refuses(learned, "odd-model"), ["temperature"])

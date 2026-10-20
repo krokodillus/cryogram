@@ -6,6 +6,8 @@ def run() -> None:
                  _seed_more_default_providers_once,
                  _lift_workflow_notes_once,
                  _clear_starter_models_once,
+                 _update_url_moved_once,
+                 _refusals_listed_once,
                  _reconcile_providers_every_boot):
         try:
             step()
@@ -20,6 +22,36 @@ def _seed_default_providers_once() -> None:
 # One-time: the default cards the spec table gained after the first seed, for installs that ran it
 def _seed_more_default_providers_once() -> None:
     _seed_defaults("default_providers_2")
+
+# One-time: a model row's no_temperature flag becomes the refuses list every setting now shares
+def _refusals_listed_once() -> None:
+    from storage import settings
+    s = settings.get()
+    if (s.get("migrations") or {}).get("refusals_listed"):
+        return
+    rows = [dict(p) for p in s.get("providers") or []]
+    for p in rows:
+        models = []
+        for m in p.get("models") or []:
+            m = dict(m)
+            if m.pop("no_temperature", None) and "temperature" not in (m.get("refuses") or []):
+                m["refuses"] = list(m.get("refuses") or []) + ["temperature"]
+            models.append(m)
+        if "models" in p:
+            p["models"] = models
+    settings.update({"providers": rows,
+                     "migrations": {**(s.get("migrations") or {}), "refusals_listed": True}})
+
+# One-time: the update check's saved address moves from GitHub to cryogram.app
+def _update_url_moved_once() -> None:
+    from storage import settings
+    s = settings.get()
+    if (s.get("migrations") or {}).get("update_url_moved"):
+        return
+    patch = {"migrations": {**(s.get("migrations") or {}), "update_url_moved": True}}
+    if ((s.get("update") or {}).get("url") or "").strip() == settings.OLD_UPDATE_URL:
+        patch["update"] = {**(s.get("update") or {}), "url": settings.UPDATE_URL}
+    settings.update(patch)
 
 # Every boot: a card without its key is switched off and the Default tick sits on an active card
 def _reconcile_providers_every_boot() -> None:

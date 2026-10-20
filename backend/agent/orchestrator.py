@@ -58,8 +58,6 @@ _TOOL_LINES = {
     "preview_run": "previewing what a run would do",
 }
 
-_REASON_CLIP = 400
-
 # The plain one-line description of each tool call the status line shows
 def _describe_tool(workflow: dict, name: str, tool_input: dict) -> str:
     inp = tool_input or {}
@@ -116,8 +114,7 @@ def _describe_tool(workflow: dict, name: str, tool_input: dict) -> str:
             if cname not in known:
                 why = str(inp.get("reason") or "").strip().rstrip(".")
                 if why:
-                    return (why[:1].lower() + why[1:_REASON_CLIP]
-                            + ("..." if len(why) > _REASON_CLIP else ""))
+                    return why[:1].lower() + why[1:]
                 return "double-checking a detail"
             inp = {**inp, "name": cname}
         line = _TOOL_LINES.get(short)
@@ -128,8 +125,7 @@ def _describe_tool(workflow: dict, name: str, tool_input: dict) -> str:
             if short in ("run_cell", "run_ai_step"):
                 why = str(inp.get("reason") or "").strip().rstrip(".")
                 if why:
-                    text += (" - " + why[:1].lower() + why[1:_REASON_CLIP]
-                             + ("..." if len(why) > _REASON_CLIP else ""))
+                    text += " - " + why[:1].lower() + why[1:]
             return text
         return short.replace("_", " ")
 
@@ -523,6 +519,8 @@ def build_now(workflow: dict, emit, include_proposals: Optional[list] = None) ->
         plan["status"] = "built" if ok else "draft"
         plan["build_log"] = built_steps
         if ok:
+            if not plan.get("built_ts"):
+                plan.pop("changes", None)
             plan["built_ts"] = time.time()
             workflow.pop("approval_grants", None)
         else:
@@ -1023,9 +1021,9 @@ def _investigate_message(ticket: dict, node: Optional[dict], case: Optional[dict
         + _empty_input_brief(case, node)
         + _browser_state_brief(ticket, node)
         + _saw_brief(ticket)
-        + "\n"
-          "\n"
-          "Work the repair skillset: invoke your 40-corpus-and-verdicts skill first, diagnose the failure CLASS (contrast the failing input with the successes above), record it with diagnose_case, then design a class-level fix and save_plan. THE FIX BEING BUILT CLOSES THE ISSUE - there is nothing to write onto it. Tell the USER in chat what went wrong and what you changed (one or two plain sentences: that is the record); anything GENERAL you learned about how the outside system behaves is a save_learning. Never run the saved workflow; run_node on the broken code/ai node with the failing input is your ceiling."
+
+        + f"\n\nThis turn is the fix for issue {ticket.get('id')}. It has already "
+          "started, so do not call resolve_issue for it. Load \"40-corpus-and-verdicts\", find the class of the failure by comparing the failing input with the successes above, and record it with diagnose_case. Before you try or change any step, save the plan with fix_note {went_wrong, will_change} and changes naming the steps you will change, and wait for the user's click on the card; then work those steps and build. Building the fix closes the issue - there is nothing to write onto it. Tell the USER in chat what went wrong and what you changed (one or two plain sentences: that is the record); anything GENERAL you learned about how the outside system behaves is a save_learning. Never run the saved workflow; run_node on the broken code/ai node with the failing input is your ceiling."
         + _CHANGE_RAILS)
 
 # The repair entry: one agent turn with the failing case, launched only by the user's click

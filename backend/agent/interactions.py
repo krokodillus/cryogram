@@ -32,8 +32,10 @@ def wait_sync(iid: str, timeout: Optional[float] = None, on_tick=None) -> Option
     limit = CARD_PATIENCE if timeout is None else timeout
     pid = entry.get("workflow_id") or ""
     deadline = _time.monotonic() + limit
+
+    wall_deadline = _time.time() + limit
     while not entry["event"].wait(min(_WAKE_SLICE, max(0.0, limit))):
-        if _time.monotonic() >= deadline:
+        if _time.monotonic() >= deadline or _time.time() >= wall_deadline:
             break
         if on_tick:
             try:

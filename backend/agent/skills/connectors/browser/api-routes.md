@@ -1,17 +1,17 @@
-# The route ladder: how a site call is made, and how a long loop survives
+# Three ways to make a request to a site, and how to make a long loop safe to resume
 
-Three ways to make the same call. Climb only as far as the site forces: tier 1 is fastest and most fragile, tier 3 slowest and most faithful. Whatever the user chooses, the loop pattern at the end is not optional for anything that sends.
+Choose the way the user's permissions and the site's own interface allow. If one way fails, that does not give you permission to get round a site that refuses access. The loop at the end of this guide is for a step that does something to each item in a list, not for a single request.
 
-## Tier 1: plain HTTP with the session from the jar
+## Way 1: a connector step with its own credential
 
-`requests` plus the profile's cookies (browser/har-capture). Fast, cheap, no window. Fragile where a site fingerprints clients: the TLS signature and header order are Python's, not Chrome's, so a strict site can answer a 403 or a challenge on a perfectly valid session. A good default for tolerant sites and for reads.
+Use plain HTTP requests when the site's API accepts a credential the user has given for this workflow, with the hosts and the impact declared on the step. A step cannot read the cookies of the browser profile. Do not copy cookies into a step's output, and do not read the app's storage to make a credential.
 
-## Tier 2: the call from inside the page, recommended when a site is strict
+## Way 2: a request from inside the signed-in browser page
 
-The request leaves the real Chrome: the right TLS, the right headers, the right cookies, the right `Referer`, and the page's own CSRF and session tokens are in scope. Nearly tier-1 speed, browser-faithful.
+Call only an address and use only a login method you have seen the page itself use, in the HAR file of a window. The step stays a browser step, with the same window and send approvals. Never put a session token in an output, and never use this way to get round a refused permission or a "too many requests" answer.
 
 ```python
-page.goto("https://www.example.com/dashboard")   # be on a real page first
+browser_goto(page, "https://www.example.com/dashboard")
 res = page.evaluate("""async ({path, body}) => {
     const r = await fetch(path, {
       method: "POST",
@@ -24,43 +24,50 @@ res = page.evaluate("""async ({path, body}) => {
 }""", {"path": "/api/v2/invitations", "body": {"id": item_id}})
 ```
 
-Read the exact endpoint, headers and token source from the recording (browser/har-capture and 25-recordings); never guess them.
+Take the exact address, headers and where the token comes from out of the HAR file (see "browser/har-capture" and "25-recordings"). Never guess them.
 
-## Tier 3: drive the UI
+## Way 3: click through the site's own pages
 
-Playwright clicking the real controls by stable selectors (the browser guide's scraping rules). Slowest, and it breaks when the DOM changes, but it is the only route when the flow has server-side steps the API path skips. Do not synthesise human-looking mouse paths: `click()` already dispatches trusted events at the element, and hand-rolled cursor drift only adds flakiness.
+Use Playwright to click the real buttons and fields, found by selectors that do not change between page loads (see the browser guide). This is the slowest way, and it breaks when the site changes its page, but it is the only way when the site does something on its server between pages that a direct request would skip. Do not make up mouse movements that look human: `click()` already sends a real click to the element, and extra pointer movement only makes the step less reliable.
 
-## When a route is closed: stop, do not adapt
+## When a way is closed: stop and find out why
 
-A route that starts returning challenges, captchas, sudden 403s on calls that worked, or "unusual activity" is closed. Say so and move up the ladder, or reduce volume. Never react by looking more like a browser: rotating agents, proxies or fingerprints is an arms race that loses, and it puts the user's account at risk rather than just the run. A rate-limit page is a full stop, always.
+A captcha, a "too many requests" answer or a refused permission stops the step. Find out why from the response or the page. Do not switch to another way on your own, and do not change the browser's identity, use proxies or retry past it. Ask the user to renew their sign-in or agree another way that is allowed; a verification on the page is handled as "browser/page-state" describes.
 
-## The loop pattern: paced, checkpointed, resumable
+## A loop that can stop and carry on
 
-Anything that works through a list per item uses this shape, sends, writes and fetches alike. It is what makes a half-finished run safe: the step declares `per_item: {"input": "items", "key": "id"}` on its plan step, and its outputs come from the record, so it finishes on any subset of the list and the user can proceed with the saved results after a stop.
+When a step does something to each item and must be able to carry on after a stop, record each item as done. Declare `per_item: {"input": "items", "key": "id"}` on the plan step, and a `requests_per_minute` input or setting with the rate the user approved. A run may carry on with only some items done only if the workflow says partial results are fine. A recorded item is skipped next time. But if the step crashes after the site accepted an item and before the step recorded it, nobody knows whether that item went: check on the site, or use the service's own protection against sending twice, before sending it again.
 
 ```python
 import random, time
+rpm = float(read_input("requests_per_minute"))
+if rpm <= 0:
+    raise ValueError("requests_per_minute must be positive")
 items = read_input("items")
+keys = [str(item["id"]) for item in items]
+if len(keys) != len(set(keys)):
+    raise ValueError("item identities are not unique; resolve duplicates before sending")
 done = checkpoints()                     # what a previous run finished
 for item in items:
     key = str(item["id"])                # stable per item, never the index
-    if key in done:                      # resume: never re-send
+    if key in done:                      # already acknowledged locally
         continue
-    result = send_one(item)              # the tier-1/2/3 call
+    result = send_one(item)              # one attempt; reconcile ambiguous prior sends first
     checkpoint(key, {"id": key, **result})   # durable, immediately after
     done = checkpoints()
     heartbeat(f"done {len(done)} of {len(items)}")
-    time.sleep(random.uniform(4, 9))     # pace with jitter, never a fixed beat
-write_output("sent", list(checkpoints().values()))
+    time.sleep(60.0 / rpm + random.uniform(0, 0.3))  # never faster than approved rate
+write_output("sent", checkpoint_values(keys))   # this input's recorded results, as a list
 ```
 
-- `checkpoint(key, ...)` fires immediately after the side effect, never at the end of the batch: the crash you are guarding against happens between the two.
-- The key is the item's own identity (a row id, a URL, a recipient). An index breaks the moment the input list changes.
-- Pace with jitter: a fixed interval is itself a signature, and bursts are what actually burden a service.
-- One send per iteration; never fire a batch concurrently.
-- The step declares `requests_per_minute` (and `route`) on its plan step, and the pacing above matches what was declared.
-- A rate-limit response is not caught and retried: let it raise. The run stops saying how many of how many are done; trying again continues from the record, and the user may proceed with the saved results instead.
+- `checkpoints()` returns a record of the items already done, keyed by item, for skipping them. A list output takes `checkpoint_values(keys)`: the recorded results for this input's keys, as a list in the same order.
+- Call `checkpoint(key, ...)` straight after the site has confirmed an item. It cannot cover the moment between the site accepting an item and your code recording it, so an item whose outcome is unknown must be checked, never simply sent again.
+- The key is the item's own identity (a row id, an address, a recipient), never its position in the list, which changes when the list changes.
+- Send no faster than the approved rate. The small random pause keeps requests from arriving in bursts. Never use timing to hide from a site's bot detection.
+- Send one item at a time. Never send several at once.
+- The plan step declares `requests_per_minute` (and `route`), and the pause in the code matches what it declares.
+- Do not catch and retry a "too many requests" answer: let the error stop the step. The run stops and says how many items of how many are done. Trying again carries on from the recorded items, or the user can go on with the results saved so far.
 
-## Volume is the user's call
+## How many and how fast is the user's decision
 
-If the user asks for more per run, or faster, than is wise: say once, plainly, what the trade is (account risk, and that spacing is what keeps a site friendly), recommend the robust shape, then build what they chose. The opening card carries the setting, so their approval is their informed yes. Never re-litigate it afterwards.
+Use the number of items and the rate the user agreed, within the site's limits and the user's permissions. If a choice makes the step clearly less reliable, explain that once, and never change the user's setting without telling them. A user's preference cannot override a site's limits or what the user is allowed to do on it.

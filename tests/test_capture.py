@@ -251,10 +251,8 @@ class TheBrowsersOwnRecordingIsMaskedTooTest(unittest.TestCase):
 
 class TheHarnessOwnsTheWindowTest(unittest.TestCase):
     def test_the_window_is_no_longer_the_steps_to_open(self):
-        from pathlib import Path as _P
-        src = _P(__file__).resolve().parent.parent / "backend" / "runtime" / "_sandbox_runner.py"
-        text = src.read_text()
-        surface = text[text.index('surface = {'):text.index('ns = dict(surface)')]
+        from runtime import contracts
+        surface = contracts.surface()
         self.assertNotIn("browser_page", surface,
                          "the step surface no longer carries the window")
         self.assertIn("browser_goto", surface, "the page work is still the step's")

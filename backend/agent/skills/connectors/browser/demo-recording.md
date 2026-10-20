@@ -1,16 +1,16 @@
-# Demo recording: the user shows the flow, the app captures it
+# Demo recording: the user shows the steps, the app records them
 
-For an undocumented system the user must demonstrate (an internal portal, a flow only they know), record the network traffic of their session while they click through it once. It replaces hand-exported developer-tools recordings, with zero setup for the user.
+Use this when the task runs on a system you have no documentation for, such as an internal portal or a process only the user knows. The user goes through the task once in a browser window, and the app records every request the site makes while they do it. The user does not need to set anything up or export anything themselves.
 
-## Consent and scope
+## Ask first, and what is recorded
 
-- Ask first, plainly: you will open a window and record what the site sends while they do the task once, credentials are masked before anything is stored, and they do the task and then confirm. No recording without that yes.
-- Never record a login: the session must already exist (the browser-login flow first). A recorded login would carry the password.
-- The recording runs only between the window opening and their confirmation; the window closes as soon as the cell ends.
+- Ask the user before you record, in plain words: you will open a window and record what the site sends while they do the task once, logins and passwords are masked before anything is saved, and they confirm when they have finished. Do not record without their yes.
+- Run the workflow's sign-in step (see the "browser-login" guide) before the demonstration, so that typing the password is not part of the recording. The app records and masks the browser's traffic by itself. Do not tell the user that the recording can be switched off for parts of the demonstration: your code cannot do that.
+- The recording runs from when the window opens until the user confirms. The window closes as soon as the try ends.
 
-## The cell
+## The try
 
-The window is the app's, and it records every request and response by itself; the demonstration is one browser cell that opens the window on screen and waits for the person:
+The app opens the window and records every request and response. The demonstration is one browser try that opens the page and waits for the user:
 
 ```python
 browser_goto(page, "https://portal.example.com/start")
@@ -19,9 +19,9 @@ confirm_with_user("Do the task once in this window, then confirm.",
 write_output("done", True)
 ```
 
-`page` is handed to you, already open. `confirm_with_user` brings the window on screen and returns when they confirm; closing the window or nobody answering pauses the run the ordinary way. The app closes the window when the cell ends, which is what completes the recording, and the cell's result names what the window kept under `$capture`: the recording as `har`, and the pages it settled on.
+Your code gets `page` already open. `confirm_with_user` brings the window to the front and returns when the user confirms. If they close the window or nobody answers, the run pauses as usual. The app closes the window when the try ends, which finishes the recording, and the try's result lists what was saved under `$capture`: the HAR file as `har`, and the HTML of the pages the window ended on.
 
-## Import and mine
+## Import it and read it
 
-- `import_recording(from_blob=<the har reference under $capture>)` turns it into a scrubbed "recording" sample: credential values become shape descriptors, the field that carried one survives, and the hostnames it touched come back for `domains`.
-- Mine it per 25-recordings, and test candidate calls with jar-auth (browser/har-capture). The session scope rule applies: the declared task only.
+- Call `import_recording(from_blob=<the har reference under $capture>)`. It saves the recording as a "recording" sample: every login value is replaced by a description of its shape, the name of the field that carried it stays, and the result lists the hosts the site used, for the step's `domains`.
+- Read it as the "25-recordings" and "browser/har-capture" guides describe. A request that only works because the browser is signed in stays inside the browser step; a connector step needs its own credential that the user has given. Use the recording only for the task the user asked for.

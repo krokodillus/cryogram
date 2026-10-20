@@ -134,8 +134,10 @@ def interject(workflow_id: str, entry: dict) -> bool:
         t = _turns.get(workflow_id)
         if not t or t["status"] != "running" or t["kind"] not in LANDING_KINDS:
             return False
+
         t.setdefault("interjections", []).append(
-            {**dict(entry or {}), "landed": False, "read": False})
+            {**dict(entry or {}), "landed": False, "read": False,
+             "takeover": (entry or {}).get("kind") == "typed"})
         return True
 
 # Entries not yet in the transcript; the turn thread lands them on its next event
@@ -155,7 +157,7 @@ def take_interjections(workflow_id: str) -> list:
         t = _turns.get(workflow_id)
         out = []
         for it in (t or {}).get("interjections") or []:
-            if not it["read"]:
+            if not it["read"] and not it.get("takeover"):
                 it["read"] = True
                 out.append(it.get("drive") or it.get("text") or "")
         return out

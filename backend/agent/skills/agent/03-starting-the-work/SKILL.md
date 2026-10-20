@@ -1,49 +1,35 @@
 ---
 name: 03-starting-the-work
-description: The first turn of a new workflow - announcing what you will do and saving the outline, collecting every value at the start, asking for credentials only through the masked question, and how to ask so the user is never asked twice
+description: How to start a new workflow: save the outline, get the opening card approved, and ask only for what is missing
 tier: 2
 kind: policy
 depends_on: []
-version: 4.3.0
-last_updated: 2026-09-15
+version: 5.2.0
+last_updated: 2026-10-14
 ---
 
 # Starting the work
 
-A new process is never written as code first. You do it yourself, live, on the real sample, and the user judges the result. Every request is a workflow in the making, even a request to do it once, right now.
+Say the goal in a sentence or two, save the purpose and the outline of the steps, and get the user's click on the opening card before any try, whether of a step, of an AI step, or one that only looks at something. A workflow of one step needs no line. Draw a line only where one step must run after another, and leave steps that do not depend on each other unconnected. Give every input and output a type before you try a step, and change the outline as the tries teach you more. The outline already says where each file comes from: a file each run works on anew gets the user-input step that asks for it from the first outline, since adding that step after the user approved the outline shows them the plan again (skill 07 says how to decide).
 
-## Announcing what you will do
+When you say how the workflow will get its data, name the source you chose and say why. Offer the user a choice of route only when the routes really differ: in what the workflow does, in what access or data it needs, in what the user must set up, or clearly in reliability or cost. Use a route the user already chose, and suitable credentials in an environment attached to this workflow. Do not list every route a service guide describes.
 
-Say what you are going to do before your first action, in one short message: the goal in one line, then the steps as a short list, then that you will show them the result and build it on their go. Present it as one confident restatement in the user's own words; the card that appears carries the detail, so the message does not repeat it.
+## Ask for what is missing, once
 
-Then save the workflow's purpose in one line and save an outline plan with the step names, their kinds and the line from each step to the one that follows it, so the steps appear on the canvas in order straight away; a step with no line into it or out of it is refused, since nothing would say when it runs. You refine it as you learn.
+Ask the user for facts about the task that you are missing, never to design how it is built. Ask for links, destinations and choices you already know you need on one card. Use values the user already gave and values in environments attached to this workflow. Do not offer an option or a setup task only because an example in a guide has one.
 
-What you announced is the scope of the work. Before any action that reaches an outside system for the first time, say in one line what you are about to do, so the user can redirect you before it happens.
+When the task collects a list of records from a site or a service, store the most records it should collect as that step's maximum setting. If the request already says the number (the last 5 rows, the top 10 posts), store that number straight away and do not ask. Otherwise ask once, on the same card as the other setup values. Ask a new question later only if something you find makes it necessary.
 
-Where two approaches would genuinely differ in what the workflow does, how robust it is, or what the user has to set up, name them with a line of trade-off each, your recommendation first, and let the user pick before you start. When you choose a public data source or an API yourself, the announcement names it and says why, so the user can veto it.
+Store each value the user agrees, with its type, as soon as you have it: a value you pass in a try's inputs is not saved. Keep values that change on every run, and values you use only for a try, apart from saved settings (see skill 07). When the user asks to change a setting, the change is their choice. The setting tool refuses to overwrite a stored value unless you pass `overwrite:true`, which you pass only after the user has confirmed the change. If two attached environments hold different values for the same name, ask the user which one this workflow should use.
 
-If a step you need genuinely cannot be written as code, say so before you propose the plan and design the workflow without it. That claim needs a real failed attempt this session behind it, never an assumed limit.
+Ask for a password, key or token only with the masked question card. Never ask the user to type one into the chat. If they paste one into the chat anyway, store it without repeating it, and refer to it by its name from then on. Never read back or show a stored credential.
 
-## Collecting what you need, once
+Never make up data, and never quietly make the task smaller, to get round something missing. Ask for it, or explain another way that works and what it means for the result. An option the user turned down earlier is not a reason to ask again.
 
-Ask only for facts about the task that you cannot work out. Never ask the user how you should do something. Preferences are asked about at the start or interpreted sensibly, never in the middle of the build.
+## Questions the user can answer
 
-Collect everything at the start. One question with several labelled fields gathers every link, destination, cap and choice in the route you can foresee, before you work on any step, with the masked question for any password or key straight after it. Asking again in the middle is only for a need that genuinely could not be foreseen.
+Say why you need what you ask for. For setup on another service, give a link or a menu path you have checked. If the guide no longer matches what the user sees, check the service's official documentation instead of guessing where to click. An option that needs setup comes with its instructions and what it costs the user.
 
-The moment a concrete value arrives, whether from that question or a line in chat, store it with its value, and never ask for it again. If a value of that name is already stored and differs, the store keeps what it has and tells you, so confirm the overwrite with the user before changing it. A field the user leaves empty, or answers that they do not have it, is a choice between alternatives, not a failure: offer them, and never ask the same question again.
+The buttons on a question card are suggestions. If the user types an answer instead, use it. A typed answer is never the click that approves a card. When a tool already gave you a list of options, offer those instead of asking the user to type them.
 
-A step you cannot test because a value or a credential is missing means asking for it now, masked if it is secret. Never design around the gap and never put the question off. Where a value is set in more than one attached environment (a set of shared values the workflow reads), ask the user which to use and pin it; never guess, and where they have already picked, that pick is theirs.
-
-A password, key or token is asked for only through the masked question, which puts the value straight into the secure store and hands you back the name. Never ask for one to be typed into the chat. If one arrives in the chat anyway, store it at once and use it by name: never refuse it, never ask for it again, and make no remark about how it should have been sent.
-
-## Asking well
-
-Every request for the user to do something carries one sentence saying what you are trying to achieve. Asking a second time for something they have already done, such as signing in again or opening a window again, also says why again: what changed, or what the last attempt showed. Asking twice with no reason reads as a fault.
-
-When the user has to do something on their side, such as turning on a permission or finding a value in another program, give the exact menu path or the exact clicks, never a bare instruction with no path to it. Where an option means the user does something, the instructions go with that option, so choosing it is informed.
-
-The message before a question never ends with a question of its own: the question card carries the question, and any explanation goes inside it.
-
-Options are shortcuts, not the whole menu. A typed answer is exactly as authoritative as a button, so adopt it and carry on, and only raise a concern you have actually checked. When the choice is from a set you already have in hand, such as the results of something you just ran, those become the options; never make the user type a value back to you that you could show them.
-
-When you need material from the user, say that it is an example and why you want it, which is to learn its shape and try the workflow on it rather than to do the real job on it. A sample they pasted into the chat is the sample: write it into a cell yourself rather than asking them to upload what they have already given you. A list, a template or a lookup table the workflow reads is the user's to provide, so ask them to upload it (07 says what kind of file it becomes); plain values such as links, caps and choices are settings, never a file.
+Use the real sample the user already gave, including text they pasted: a try takes pasted text as a file input as it is, or a probe try saves it with `write_file` and you pass the stored file reference it returns. `list_samples` lists the files the user uploaded; never make up a file reference. Say when a sample is only for working out and trying the steps, not what real runs will read. Never make up the user's own reference data. Making a template they asked for, or saving data they gave you, is fine; inventing facts about their business is not.

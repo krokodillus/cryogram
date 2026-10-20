@@ -138,3 +138,53 @@ class SdkEnvironmentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AStopKillsTheProgramTest(unittest.TestCase):
+    def test_the_kill_comes_before_the_cancelled_read_and_is_not_a_failure(self):
+        try:
+            import claude_agent_sdk
+            from claude_agent_sdk._internal.transport import subprocess_cli
+        except Exception:
+            self.skipTest("claude-agent-sdk not installed")
+        import asyncio
+        import turns
+        order = []
+
+        class Process:
+            def kill(self):
+                order.append("kill")
+
+        class Holder:
+            def __init__(self, prompt, options):
+                self._process = Process()
+
+        def fake_query(prompt, options, transport):
+            async def gen():
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    order.append("read cancelled")
+                    raise
+                yield None
+            return gen()
+
+        pid = "p_stop_kills"
+        workflow = {"id": pid, "nodes": [], "edges": [], "variables": [],
+                    "transcript": [], "transcript_seq": 0}
+        tr = mock.Mock(model="", auth="claude-subscription")
+        tr._sdk_config.return_value = ([], [])
+        self.assertTrue(turns.begin(pid, "chat"))
+        turns.request_stop(pid)
+
+        with mock.patch.object(turns, "should_stop", side_effect=[False, True, True, True]), \
+                mock.patch.object(claude_agent_sdk, "query", fake_query), \
+                mock.patch.object(subprocess_cli, "SubprocessCLITransport", Holder), \
+                mock.patch.object(loop, "_sdk_env", return_value={}), \
+                mock.patch.object(loop, "_sdk_tool_server", return_value={}), \
+                mock.patch.object(loop, "sdk_program", return_value="/bin/echo"):
+            try:
+                reply = loop._run_turn_sdk(workflow, "hello", lambda ev: None, "chat", tr)
+            finally:
+                turns.finish(pid)
+        self.assertEqual(order, ["kill", "read cancelled"])
+        self.assertTrue(reply.get("stopped"))

@@ -1,4 +1,4 @@
-# Tests for backend/updater.py: the update check reads the repository's latest release and says whether it is newer, and nothing more
+# Tests for backend/updater.py: the update check asks for the repository's latest release, says whether it is newer, and sends only the version and the OS
 from __future__ import annotations
 
 import unittest
@@ -10,8 +10,8 @@ from tests import _bootstrap
 import config
 import updater
 
-def _release(tag: str, body: str = "- things") -> dict:
-    return {"tag_name": tag, "body": body,
+def _release(tag: str) -> dict:
+    return {"tag_name": tag,
             "html_url": f"https://github.com/x/y/releases/tag/{tag}"}
 
 class CheckFlow(unittest.TestCase):
@@ -32,11 +32,11 @@ class CheckFlow(unittest.TestCase):
         self.assertFalse(r["available"])
         self.assertEqual(r["channel_kind"], "dev")
 
-    def test_a_newer_release_is_available_with_its_notes(self):
+    def test_a_newer_release_is_available_with_its_page(self):
         r = self._check({"return_value": _release("v99.999")})
         self.assertTrue(r["available"])
         self.assertEqual(r["latest"], "99.999")
-        self.assertEqual(r["changelog"], "- things")
+        self.assertNotIn("changelog", r)
         self.assertEqual(r["channel_kind"], "source")
         self.assertIn("releases/tag/v99.999", r["page"])
 
@@ -76,6 +76,38 @@ class BusyProbe(unittest.TestCase):
         finally:
             turns.finish("p_upd_busy")
         self.assertFalse(turns.any_running())
+
+class WhatTheCheckSaysTest(unittest.TestCase):
+    def test_the_user_agent_is_the_version_and_the_os(self):
+        import getpass
+        import socket
+        ua = updater.user_agent()
+        self.assertTrue(ua.startswith(f"Cryogram/{config.VERSION} ("), ua)
+        self.assertTrue(ua.endswith(")"), ua)
+        self.assertNotIn(socket.gethostname(), ua)
+        self.assertNotIn(getpass.getuser(), ua)
+
+    def test_the_request_carries_it(self):
+        seen = {}
+
+        class _Answer:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b'{"tag_name": "v9.9.9"}'
+
+        def fake_open(req, **kw):
+            seen["ua"] = req.get_header("User-agent")
+            seen["url"] = req.full_url
+            return _Answer()
+
+        with mock.patch.object(updater.urllib.request, "urlopen", fake_open):
+            updater._http_json("https://cryogram.app/api/latest")
+        self.assertEqual(seen["ua"], updater.user_agent())
+        self.assertEqual(seen["url"], "https://cryogram.app/api/latest")
+
+    def test_the_default_address_is_cryogram_app(self):
+        from storage import settings
+        self.assertEqual(settings.DEFAULTS["update"]["url"], "https://cryogram.app/api/latest")
 
 class VersionSchemeTest(unittest.TestCase):
     def test_old_series_sorts_below_the_new_scheme(self):

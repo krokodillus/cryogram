@@ -1585,7 +1585,8 @@ class Handler(BaseHTTPRequestHandler):
             raise
         if not drive:
             turns.finish(workflow_id, None)
-            return self._json({"landed": "noop"})
+            return self._json({"landed": "asked", "items": items} if items
+                              else {"landed": "noop"})
 
         from agent import opening
         question = opening.owed(workflow)
@@ -1705,7 +1706,7 @@ class Handler(BaseHTTPRequestHandler):
             row = providers.find_model(model, for_node=True, provider_id=provider_id)[1]
             temperature = float(old_ref.get("temperature") or 0.0)
             if "temperature" in body:
-                if row.get("no_temperature"):
+                if "temperature" in providers.model_refuses({"model": model, "provider_id": provider_id}):
                     return self._json({"error": "this model takes no temperature"}, 400)
                 try:
                     t = float(body.get("temperature"))

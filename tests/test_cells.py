@@ -185,3 +185,27 @@ class BlobsGoWithTheirOwnerTest(unittest.TestCase):
             self.assertTrue(blobstore.exists(har))
 
         self.assertEqual(len(cells._load_raw(pid)), cells.CAPTURES_KEPT + 2)
+
+class OnlyNewRequestsTest(unittest.TestCase):
+    def test_a_later_window_lists_only_requests_the_previous_did_not_make(self):
+        from unittest import mock
+        from agent import cell_gates, cells as _cells
+        before = [{"id": 0, "method": "GET", "url": "https://x.com/api/feed"},
+                  {"kind": "script", "count": 3, "ids": [1, 2, 3]}]
+        now = [{"id": 0, "method": "GET", "url": "https://x.com/api/feed"},
+               {"id": 1, "method": "GET", "url": "https://x.com/api/next"},
+               {"kind": "script", "count": 4, "ids": [2, 3, 4, 5]}]
+        result = {"ok": True, "output": {"threads": [], "$capture": {"calls": now, "har": "blob:x"}}}
+        with mock.patch.object(_cells, "window_index", return_value=before):
+            cell_gates._only_new_requests("wf", 2, result)
+        cap = result["output"]["$capture"]
+        self.assertEqual([r.get("url") or r.get("kind") for r in cap["calls"]],
+                         ["https://x.com/api/next", "script"])
+        self.assertIn("1 data requests are the same as window 1", cap["calls_unchanged"])
+        self.assertEqual(now[0]["url"], "https://x.com/api/feed")
+
+    def test_the_first_window_lists_everything(self):
+        from agent import cell_gates
+        result = {"ok": True, "output": {"$capture": {"calls": [{"id": 0, "url": "u"}]}}}
+        cell_gates._only_new_requests("wf", 1, result)
+        self.assertEqual(len(result["output"]["$capture"]["calls"]), 1)

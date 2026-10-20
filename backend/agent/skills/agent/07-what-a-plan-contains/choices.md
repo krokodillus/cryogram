@@ -1,15 +1,15 @@
-# Choices: where a dropdown's options come from
+# Choices: where the options in a dropdown come from
 
-Only a user-input step can offer a choice (an `enum` field with `options`). A setting never can: a settings table holds values the user types and keeps, not a selection, and an enum setting is flagged as a design gap at save. The options must have a source, and there are exactly two honest ones.
+Only a user-input step can offer the user a choice: a field of type `enum` with its `options`. A setting never can. A setting holds a value the user types and keeps, not a choice from a list, and a setting of type enum is a design gap when the plan is saved. The options must come from somewhere real, and there are only two places they can.
 
-## Produced by an earlier step, the usual answer
+## From an earlier step, which is the usual case
 
-Scan the accounts, then pick one: the picking step runs after the step that produced the list and reads it by name from the run's pool, with no line carrying it. Over records it declares `value_field` on its scalar output, which field of the picked item becomes the value, while the user sees a readable label. This is right whenever the list is real-world state: channels, workflows, folders, people, files, anything a person could add to tomorrow.
+For example, one step reads the user's accounts, and the next step lets the user pick one. The step that offers the choice runs after the step that produced the list, and reads the list by its name from the earlier step's outputs; no line carries it. When the list holds records, the choosing step declares `value_field` on its output that holds one value (not a list): the field of the chosen record that becomes the value, while the user sees a label they can read. Do this whenever the list is something that exists outside the workflow and can change: channels, workflows, folders, people, files, anything a person could add tomorrow.
 
-## Static, and only when the code test passes
+## Written into the step, only when the code would change anyway
 
-The test is whether the code would have to change if the list changed. Export formats (`csv | json | xlsx`), a mode the step branches on, units the code converts between: the step's own code enumerates them, so a new option means new code either way, and those are safe as static options. A list that really changes, baked in as static options, passes every check, ships, works in the demo, and quietly offers the wrong three names the day someone adds a fourth; nothing in the workflow notices, the user just cannot pick the thing they need. That is the failure this rule exists for.
+Ask: would the code have to change if the list changed? Export formats (`csv`, `json`, `xlsx`), a mode the step's code branches on, or units the code converts between are listed in the step's own code, so a new option needs new code either way: these can be fixed options. A list that does change, written in as fixed options, passes every check, is built, works in the demo, and then offers the wrong three names on the day someone adds a fourth. Nothing in the workflow notices; the user just cannot pick what they need. That is the failure this rule prevents.
 
-## While exploring
+## While you work out the steps
 
-If you cannot yet tell which kind a list is, ask whether the options should stay fixed or be looked up each run. One question, and the answer decides the shape.
+If you cannot tell yet which kind of list it is, ask the user whether the options should stay fixed or be looked up on each run. One question, and the answer decides how the step is built.

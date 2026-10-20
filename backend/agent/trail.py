@@ -81,7 +81,20 @@ def _result_line(it: dict) -> str:
             + (f"; {'; '.join(held)}" if held else "")
             + f" - open it with read_earlier_result({it.get('id')})")
 
-def _render_item(it: dict) -> str:
+# Whether a guide loaded earlier now reads differently from what that load returned
+def _guide_changed(sid, result) -> bool:
+    data = result.get("data") if isinstance(result, dict) else None
+    old = data.get("content") if isinstance(data, dict) else None
+    if not sid or not isinstance(old, str):
+        return False
+    try:
+        from agent.actions import read_skill_or_learning
+        got = read_skill_or_learning(str(sid))
+    except Exception:
+        return False
+    return got is not None and (got.get("content") or "") != old
+
+def _render_item(it: dict, pinned_skills=()) -> str:
     k = it.get("kind")
     if k == "user":
         return "user: " + str(it.get("text") or "")
@@ -92,6 +105,13 @@ def _render_item(it: dict) -> str:
                 + " with " + json.dumps(it.get("args") or {}, default=str))
 
         if str(it.get("name") or "") == "load_skill":
+            sid = (it.get("args") or {}).get("id")
+            if sid in pinned_skills:
+                return head + "\nresult: current full body supplied in active skills"
+
+            if _guide_changed(sid, it.get("result")):
+                return (head + "\n"
+                               "result: this guide has changed since you loaded it; load_skill gives the current text")
             return head + "\nresult: " + json.dumps(it.get("result"), default=str)
         return head + "\n" + _result_line(it)
     return ""
@@ -103,7 +123,7 @@ def _when(ts: float) -> str:
         return "?"
 
 # The newest turns, whole, for the next turn's opening; returns the text and when the replayed span starts
-def replay(workflow_id: str, window: Optional[int] = None) -> tuple[str, Optional[float], str]:
+def replay(workflow_id: str, window: Optional[int] = None, *, pinned_skills=()) -> tuple[str, Optional[float], str]:
     if window is None:
         window = TRAIL_WINDOW_CHARS
     with _lock:
@@ -119,7 +139,7 @@ def replay(workflow_id: str, window: Optional[int] = None) -> tuple[str, Optiona
     trimmed_note = ""
     for t in reversed(turns):
         items = db.trail_items(workflow_id, t["turn_id"])
-        lines = [_render_item(i) for i in items]
+        lines = [_render_item(i, pinned_skills) for i in items]
         lines = [l for l in lines if l]
         size = sum(len(l) + 1 for l in lines)
         if spent + size <= window:

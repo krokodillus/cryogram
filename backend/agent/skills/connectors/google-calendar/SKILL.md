@@ -1,48 +1,48 @@
 ---
 name: google-calendar
-description: WHEN a workflow step needs to read events from or create events in Google Calendar - the secret iCal read route, service-account routes, the attendee limitation, gotchas
+description: WHEN a step reads or creates Google Calendar events: the secret iCal address, the Calendar API with a service account, or an Apps Script bridge
 tier: 2
 kind: action
 depends_on: []
-version: 1.2.0
-last_updated: 2026-09-10
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # Reading and writing Google Calendar
 
-First, check the workflow's attached environments for an existing Google service-account key. If one is there, lead with the route that uses it. If none exists and you present a fork, include the reuse angle: a user who will build more Google automations, or already has a service account, sets it up once, saves the JSON key in an environment, and every future workflow reuses it without re-entering.
+First check the environments attached to the workflow for a Google service-account key. If one is there, offer the route that uses it first. If there is none and you offer the user a choice, mention the reuse option: a user who will build more Google automations, or who already has a service account, sets it up once, saves the JSON key in an environment, and every later workflow uses it without entering it again.
 
-## Route 1: the secret iCal address, read-only, zero setup, the locked-in route for reads
+## Route 1: the secret iCal address, for read-only tasks that the feed can answer
 
-The user opens calendar.google.com, the gear, Settings, picks the calendar in the left sidebar, "Integrate calendar", and copies the "Secret address in iCal format" (the .ics URL). The URL is the credential: collect it through the masked ask, as a secret named for what it is (the calendar's iCal URL). "Reset" on that page revokes it.
+The user opens calendar.google.com, clicks the gear, then Settings, picks the calendar in the left sidebar, clicks "Integrate calendar", and copies the "Secret address in iCal format" (the .ics URL). Anyone with this URL can read the calendar, so collect it through the masked ask as a secret named for what it is (the calendar's iCal URL). The "Reset" button on that page makes the old URL stop working.
 
-- A plain GET gives a 200 with text/calendar. Parse it with the `icalendar` package; recurring events arrive as RRULEs, so expand them with `recurring-ical-events` when the workflow needs concrete instances, and never hand-roll RRULE arithmetic.
-- Freshness: direct fetches are usually fresh within minutes, but Google publishes no guarantee. Never promise real time; poll, do not hammer.
-- Workspace accounts may hide the secret address under an admin external-sharing policy. The fork question is whether the user sees "Secret address" on that page; if not, Route 2.
-- The domain is calendar.google.com. Read-only: never a write through ICS.
+- A plain GET returns a 200 with `text/calendar`. Parse it with the `icalendar` package. Recurring events arrive as RRULEs. When the workflow needs each separate occurrence, expand them with `recurring-ical-events`, and never write your own RRULE arithmetic.
+- Do not promise real-time data. Fetch the feed when the user runs the workflow; Cryogram does not poll in the background. When the task needs queries the feed cannot do, use the API route.
+- Workspace accounts may hide the secret address when an admin has restricted external sharing. Ask the user whether they see "Secret address" on that page. If they do not, use Route 2.
+- The domain is calendar.google.com. This route only reads: never write through ICS.
 
 ## Route 2: a service account, for reads with filters and for creating events
 
-The same service-account pattern as Drive, and one JSON key can serve both. Setup: console.cloud.google.com, a project (one project serves every workflow the user builds; reuse theirs when they have one), enable the Calendar API, Service accounts, Create, a JSON key (collected through the masked ask). Then the user shares the calendar: Calendar settings, "Share with specific people or groups", add the service account's email, with "See all event details" for reads or "Make changes to events" for writes.
+This is the same service-account pattern as Drive, and one JSON key can serve both. Setup: the user opens console.cloud.google.com and creates a project (one project serves every workflow the user builds; use theirs when they already have one), enables the Calendar API, goes to Service accounts, Create, and makes a JSON key (collected through the masked ask). Then the user shares the calendar: Calendar settings, "Share with specific people or groups", add the service account's email address, with "See all event details" for reads or "Make changes to events" for writes.
 
-- Read: GET `www.googleapis.com/calendar/v3/calendars/<calendarId>/events?timeMin=...&singleEvents=true&orderBy=startTime` with the bearer token. The calendarId is the user's email for the primary calendar, or the long `...@group.calendar.google.com` id from "Integrate calendar".
-- Write: POST `.../events`; success is a 200 with the event JSON, whose `htmlLink` is the user-facing proof, so show it.
+- Read: GET `www.googleapis.com/calendar/v3/calendars/<calendarId>/events?timeMin=...&singleEvents=true&orderBy=startTime` with the bearer token. The calendarId is the user's email address for the primary calendar, or the long `...@group.calendar.google.com` id shown under "Integrate calendar".
+- Write: POST `.../events`. A 200 with the event JSON means it worked. Its `htmlLink` is the link the user can open to see the event, so show it.
 - The domains are oauth2.googleapis.com and www.googleapis.com.
 
 What goes wrong:
 
-- The attendee wall: a service account cannot invite attendees without domain-wide delegation (a 403; admin-only and Workspace-only). Events with times, a description and a location work fine. If the workflow must invite people on a personal account, use the Apps Script bridge (Route 3).
-- The shared calendar never shows in the service account's own calendar list, so call events with the explicit calendarId. A 404 is a wrong calendarId or an unsaved share, not a missing list entry.
-- Times are RFC 3339 with a timezone; all-day events use `date` and timed events `dateTime`, and mixing them gives a 400.
+- A service account cannot invite attendees unless domain-wide delegation is set up. Without it you get a 403, and only an admin can set it up, and only on Workspace. Events with times, a description and a location work fine. If the workflow must invite people from a personal account, use the Apps Script bridge (Route 3).
+- A calendar shared with the service account does not appear in the service account's own calendar list, so call events with the explicit calendarId. A 404 means the calendarId is wrong or the share was not saved. It does not mean the calendar is missing from the list.
+- Times are RFC 3339 with a time zone. All-day events use `date` and timed events use `dateTime`. Mixing them gives a 400.
 
-## Route 3: an Apps Script bridge, for invites on personal accounts
+## Route 3: an Apps Script bridge, for invitations from personal accounts
 
-The same web-app pattern as the Drive guide: a `doPost` calling `CalendarApp.getDefaultCalendar().createEvent(title, start, end, {description, location, guests, sendInvites: true})`, which executes as the user, so invitations send. The /exec URL is the credential; follow redirects; allowlist script.google.com and script.googleusercontent.com; a new version on the same deployment for edits; success is the script's own JSON. The quota is about 5,000 created events a day, far above any workflow.
+Use an Apps Script handler that checks authentication, and only when the user has agreed to this route. The handler checks a shared secret from Script Properties before it creates the event and sends the invitations, and returns explicit JSON that includes the event's id. A deployment open to Anyone needs this check, because its URL alone is not authentication. Store the caller's credentials as secrets, each under its own name. Allow the hosts the web app redirects to (script.google.com and script.googleusercontent.com), and keep the same deployment when you edit the script. Check the current quotas for the volume you need, and do not assume every workflow fits within them.
 
-## If company IT blocks it
+## If the company's IT department blocks it
 
-When there is no secret address, no external sharing and Apps Script is restricted, the one-line ask for the admin: please allow calendar sharing with a service account (read or edit on the calendar), or enable the secret iCal address for it.
+When there is no secret address, no external sharing and Apps Script is restricted, the one-line request for the admin is: please allow calendar sharing with a service account (read or edit on the calendar), or enable the secret iCal address for it.
 
 ## Official docs
 
-Check here if a route fails: https://support.google.com/calendar/answer/37648
+If a route fails, check here: https://support.google.com/calendar/answer/37648

@@ -68,7 +68,8 @@ def _structured_problem(port: dict, sch: dict, value: Any, found: list) -> dict:
             "detail": found[:NAMED_ITEMS * 2]}
 
 # Checks values against the declared ports and returns problems as plain sentences with exact positions
-def check_ports(ports: list, values: Any, require_all: bool = False) -> list[dict]:
+def check_ports(ports: list, values: Any, require_all: bool = False,
+                empty_ok: bool = False) -> list[dict]:
     problems: list[dict] = []
     if not isinstance(values, dict):
         if ports:
@@ -93,7 +94,7 @@ def check_ports(ports: list, values: Any, require_all: bool = False) -> list[dic
         if p.get("optional") and v in (None, ""):
             continue
         if items or shape.is_structured(sch):
-            if require_all and sch.get("x-nonempty") \
+            if require_all and not empty_ok and sch.get("x-nonempty") \
                     and isinstance(v, list) and not v:
                 problems.append({"port": name, "type": t,
                                  "empty_output": True,

@@ -5,7 +5,7 @@ from typing import Optional
 
 from agent import steps
 from agent import node_tools
-from step_types import reaches_outside
+from step_types import reaches_outside, writes_outside
 
 def _resolve(workflow: dict, ref: str) -> Optional[dict]:
     for n in workflow.get("nodes", []):
@@ -42,7 +42,7 @@ def check(workflow: dict, plan: dict, prior_node_ids: Optional[set] = None) -> d
         if pn.get("type") and built.get("type") != pn.get("type"):
             findings.append(f"node \"{nm}\" was planned as {pn.get('type')!r} but "
                             f"built as {built.get('type')!r}")
-        if reaches_outside(pn) and not str(built.get("external_impact") or "").strip():
+        if writes_outside(pn) and not str(built.get("external_impact") or "").strip():
             findings.append(f"connector \"{nm}\" declares no external_impact - the "
                             "user cannot see what they would be approving")
         _check_ports(pn, built, findings)

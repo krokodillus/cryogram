@@ -96,7 +96,7 @@ class LogicPresenceTest(unittest.TestCase):
         plan = _plan([_code("a", outputs=["x"], sketch="")])
         r = plan_logic.check(_proj(), plan)
         self.assertFalse(r["ok"])
-        self.assertTrue(any("what it does" in f for f in r["findings"]))
+        self.assertTrue(any("doesn't have any code yet" in f for f in r["findings"]))
 
     def test_ai_node_missing_prompt_flagged_blank_model_is_not(self):
         node = {"name": "judge", "type": "ai", "inputs": [],
@@ -166,6 +166,34 @@ class NoNumberCutsAListTest(unittest.TestCase):
                 "write_output('messages', [])")
         self.assertEqual(self._gaps(code, ["conversations", "max_conversations"]), [])
 
+class EveryListHasAMaximumTest(unittest.TestCase):
+    def _step(self, **kw):
+        step = {"name": "Collect threads", "type": "browser", "read_only": True,
+                "inputs": [{"name": "max_threads", "type": "number"}],
+                "outputs": [{"name": "threads", "type": "list"}],
+                "code": "n = read_input('max_threads')\nwrite_output('threads', [])"}
+        step.update(kw)
+        return step
+
+    def test_a_collecting_step_without_a_maximum_is_a_gap(self):
+        got = plan_logic._max_setting_findings([self._step()])
+        self.assertEqual(len(got), 1)
+        self.assertIn("max_setting", got[0])
+
+    def test_the_maximum_is_a_number_input_the_code_reads(self):
+        self.assertEqual(plan_logic._max_setting_findings([self._step(max_setting="max_threads")]), [])
+        self.assertIn("not one of the step's number inputs",
+                      plan_logic._max_setting_findings([self._step(max_setting="limit")])[0])
+        unread = self._step(max_setting="max_threads", code="write_output('threads', [])")
+        self.assertIn("never reads it", plan_logic._max_setting_findings([unread])[0])
+
+    def test_a_sending_step_and_a_step_with_no_list_need_none(self):
+        self.assertEqual(plan_logic._max_setting_findings([self._step(read_only=False)]), [])
+        one = self._step(outputs=[{"name": "profile", "type": "record"}])
+        self.assertEqual(plan_logic._max_setting_findings([one]), [])
+        code = self._step(type="code")
+        self.assertEqual(plan_logic._max_setting_findings([code]), [])
+
 class CodeStepDomainsTest(unittest.TestCase):
     def test_code_step_with_domains_is_a_gap(self):
         step = _code("fetch it", outputs=["rows"])
@@ -213,7 +241,7 @@ class PerRunReasonTest(unittest.TestCase):
                       _code("greet", inputs=["city"], outputs=["msg"])])
         r = plan_logic.check(_proj(), plan)
         self.assertFalse(r["ok"])
-        f = next(f for f in r["findings"] if "EVERY run" in f)
+        f = next(f for f in r["findings"] if "on every run" in f)
         self.assertIn("per_run_reason", f)
         self.assertIn("declare_variables", f)
 
@@ -912,11 +940,17 @@ class SettingVocabularyTest(unittest.TestCase):
                        "outputs": [{"name": "out", "type": "text"}]}])
 
     def test_every_setting_type_is_accepted(self):
-        for t in ("text", "longtext", "number", "date", "boolean",
-                  "folder", "file"):
+        for t in ("text", "longtext", "number", "date", "boolean", "folder"):
             r = plan_logic.check(_proj(), self._plan_with(t))
             self.assertEqual(r["settings"], ["thing"], t)
             self.assertFalse(any("can only be" in f for f in r["findings"]), t)
+
+    def test_a_file_nothing_provides_asks_what_it_is_for(self):
+        r = plan_logic.check(_proj(), self._plan_with("file"))
+        self.assertEqual(r["settings"], [])
+        self.assertTrue(any('reads the file "thing", which nothing provides' in f
+                            and "each run works on a different file" in f
+                            for f in r["findings"]), r["findings"])
 
     def test_an_undeclared_type_is_still_a_setting(self):
         for t in ("",):
@@ -1060,9 +1094,14 @@ class PerItemTest(unittest.TestCase):
             _plan([step]))["findings"] if "per_item" in f]
 
     def test_a_looping_step_without_the_declaration_is_a_gap(self):
-        gaps = self._gaps(self._step(self.LOOP))
+        step = self._step(self.LOOP)
+        step["type"] = "connector"
+        gaps = self._gaps(step)
         self.assertEqual(len(gaps), 1, gaps)
         self.assertIn('works through "items" item by item', gaps[0])
+
+    def test_a_pure_local_loop_does_not_need_recovery_state(self):
+        self.assertEqual(self._gaps(self._step(self.LOOP)), [])
 
     def test_declared_and_recorded_is_clean(self):
         self.assertEqual(self._gaps(self._step(self.KEPT, {"input": "items", "key": "id"})), [])

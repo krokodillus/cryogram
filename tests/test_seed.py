@@ -171,3 +171,40 @@ class DefaultProviderSeedTest(unittest.TestCase):
         settings.update({"providers": []})
         seed._seed_more_default_providers_once()
         self.assertEqual(settings.get()["providers"], [])
+
+class UpdateUrlMoveTest(unittest.TestCase):
+    def _with(self, url):
+        from storage import settings
+
+        m = {**(settings.get().get("migrations") or {}), "update_url_moved": False}
+        settings.update({"migrations": m, "update": {"url": url}})
+
+    def test_the_old_github_address_moves_once(self):
+        from storage import settings
+        self._with(settings.OLD_UPDATE_URL)
+        seed._update_url_moved_once()
+        self.assertEqual(settings.get()["update"]["url"], settings.UPDATE_URL)
+        self.assertTrue(settings.get()["migrations"]["update_url_moved"])
+        settings.update({"update": {"url": settings.OLD_UPDATE_URL}})
+        seed._update_url_moved_once()
+        self.assertEqual(settings.get()["update"]["url"], settings.OLD_UPDATE_URL)
+
+    def test_an_address_set_to_something_else_stays(self):
+        from storage import settings
+        self._with("https://example.test/latest")
+        seed._update_url_moved_once()
+        self.assertEqual(settings.get()["update"]["url"], "https://example.test/latest")
+
+class RefusalsListedOnceTest(unittest.TestCase):
+    def test_the_flag_becomes_the_list_once(self):
+        from storage import settings
+        m = {**(settings.get().get("migrations") or {}), "refusals_listed": False}
+        settings.update({"migrations": m, "providers": [
+            {"id": "p_r", "models": [{"name": "picky", "no_temperature": True},
+                                     {"name": "easy"}]}]})
+        seed._refusals_listed_once()
+        rows = {r["name"]: r for r in settings.get()["providers"][0]["models"]}
+        self.assertEqual(rows["picky"]["refuses"], ["temperature"])
+        self.assertNotIn("no_temperature", rows["picky"])
+        self.assertNotIn("refuses", rows["easy"])
+        self.assertTrue(settings.get()["migrations"]["refusals_listed"])

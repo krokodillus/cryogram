@@ -1,87 +1,99 @@
 ---
 name: browser
-description: WHEN a workflow step needs data from a website that blocks automated requests (a 403 or bot check on a plain fetch) or has no usable API - Reddit always, go straight here - drive the user's real Chrome with Playwright
+description: WHEN a step needs a browser window on a site: how to open pages, read them, scroll lists, check you are on the right page, and reuse what earlier windows saved
 tier: 2
 kind: action
 depends_on: []
-version: 2.8.0
-last_updated: 2026-09-15
+version: 3.2.0
+last_updated: 2026-10-16
 ---
 
-# Reading websites with a real browser
+# Browser work
 
-The fallback ladder: an official API or export that works comes first, and this route takes over when the official one is difficult (approval-gated, admin-only), fails, or the user prefers not to use it. Reddit defaults here, because its API is approval-gated and its listings are bot-checked. Anywhere else, one 403 or bot check on a plain fetch means switch; never iterate headers against a bot wall.
+If the site has an official API or data export that does what the task needs, use that instead of a browser. An HTTP 403 does not mean you need a browser: first check whether the request was missing a login or a permission. Use a browser for a task that can only be done in a browser, on a site the user approved. Do not use a browser to get round a site that refused access.
 
-A step that needs a logged-in session loads `browser-login`.
+## Other guides to load
 
-The reference documents, loaded the moment their condition holds:
+- Load "browser/page-state" before a step reads a page, unless it was already given to you. It says how to check the page has the content you expect, and what to do on a sign-in page, a captcha or an empty page.
+- Load "browser-login" when the workflow needs the user to be signed in to the site.
+- Load "browser/har-capture" when you look through the HAR file for the requests that carry the task's data.
+- Load "browser/demo-recording" when the user has to show you the steps on a site because they are not documented.
+- Load "browser/api-routes" when a step calls the site's own API from inside the page, or does something to each item in a list and must be able to carry on after a failure.
 
-- Load "browser/har-capture" when you mine a recording. The window records every call by itself, and reading that recording is how a site's own data calls are found, which often turns the step into a plain connector. Load it when you have a recording to read, never to make one happen. It also carries jar-auth, calling the mined API with the session's cookies.
-- Load "browser/page-state" before writing any unattended page-reading step: the content-marker gate, and the run-time human handoff when a captcha, login or block page appears.
-- Load "browser/demo-recording" when the user must show a flow (an undocumented portal): the app records their demonstration, with their explicit yes first.
-- Load "browser/api-routes" when a step sends or writes per item, or a site starts refusing the direct call: the three routes, when a route is closed, and the paced, checkpointed, resumable loop every sending step uses.
+## The app opens and closes the browser window
 
-## The window is the app's; you write the page work
+A browser step in the plan declares `type: browser`, the `url` it opens, and `read_only` (true if it only reads, false if it changes anything on the site). Signing in changes nothing on the site, so a step that only signs in, or signs in and then reads, is `read_only: true`. It does not declare `domains`. A step that changes something on the site also declares `external_impact`: one plain sentence saying what it changes, which the user reads before they approve it.
 
-```python
-browser_goto(page, "https://...")        # `page` is already open, on the step's url
-...whatever this step does on the page...
-write_output("rows", rows)
-```
+A try that is not one of the plan's steps, for example a try to look at a page, passes `browser=true` and `url` to run_cell. Every try that opens a window must have a `reason`: one sentence saying why the window needs to open. The user is asked on a card before a window opens, unless they already said "don't ask again" for that site for a step that only reads, and before a step sends anything for real.
 
-`page` is handed to you. The app opens the window before your code runs, on this workflow's own profile (so a login sticks), with the flags a logged-in site needs, recording every request and response, copying each page it settles on, and it closes the window afterwards - after your declared outputs have been checked, so a step that produced the wrong shape still has the page and the traffic behind its issue. Opening and closing are not yours to write and there is no `with` block: a step that declares itself `type: browser` gets a window, and no other type may open one. `confirm_with_user` shows the window when the person must see it.
+The app opens a Chrome window that uses this workflow's own browser profile, so earlier logins are still there. Your code gets a Playwright `page` that is already open. While your code runs, the app saves every request and response the page makes in a HAR file, and saves the page's HTML. When your code ends, the app closes the window.
 
-`page` is the real Playwright page: click, type, scroll, wait, read frames, accept downloads, and loop over as many pages of this step's kind as the work needs.
+Do not start Chrome yourself, install a browser, change the browser profile, start other programs or read the browser's cookie files. Use `browser_goto(page, url)` to go to a page. `browser_options` can set the window size, the language and the time zone, and nothing else.
 
-- `browser_goto(page, url)` is how you navigate: it retries, and it remembers where the step means to be, so a login that lands you on a feed is undone before the step carries on. It gives up with `unexpected_input` naming the address rather than reading whatever loaded.
-- A page that loads as you go is yours to scroll, with `page` like any other page work, and a copy taken before that scrolling holds only what had loaded, with nothing in the html to say it is short. Every page copy says how much of the page it had seen against the page's height, so check that before you parse a list, feed or search result, and when there was more, say you have the first part rather than reporting the count as the total.
-- A BUILT step keeps only what its code writes out - except when it fails, and then the window's recording is kept as the issue's evidence. A BUILD CELL keeps everything either way, because looking at the page is the point of opening it, and the cell's own result names what came back (`captured`, and a line saying how to read it) in the same turn you decide what to do next. The result carries `$capture`: a line for every call the page made, and a line for every page copy with how much of it had loaded. Read that listing and you know what the window saw; chain the pieces you want into the next cell. One window answers every later question about that page.
-- The app puts `playwright` in the step's packages itself, because the step is `type: browser`; never `playwright install`. The plan step declares the `url` it opens, which is what the person is asked about. The step's own code reaches no address: the page's traffic is the browser's, and a call to a service outside the window is its own connector step.
-- A step that needs a particular page size, language or time zone declares `browser_options` beside its `url`, for example `{"viewport": {"width": 1400, "height": 900}, "locale": "en-GB"}`. There are none by default, and the profile, the recording and the launch flags are the app's.
-- When only Edge is installed, say so in the plan; the app opens Chrome, Chrome Beta, Chromium or Edge, whichever is there. "profile is already in use" means a leftover Chrome is open on that profile: the run pauses and asks the person to close it.
+With the `page`, your code can click, type, scroll, wait, and read frames and downloads. Do not open extra tabs.
 
-## Everything the page holds, in the first window
+One browser step can open many pages if they are the same kind of page, for example every profile in a list. Work on a different kind of page, or with a different service, goes in a separate step. So collecting a list and opening each item in it are two steps. The first step does everything needed to collect the whole list, whether that is scrolling, clicking "next", going to the next page of results, or several of these one after another, and saves each item's link as it goes; it never opens an item. The second step opens each saved link. Opening an item needs different code and fails in different ways from collecting the list, so keeping them apart makes each easier to check and to fix. Each step has its own maximum setting: how many links to collect, and how many to open. When the list runs over several pages, try the first step with a maximum just above the number of items on the first page, so the try shows it moves on to the next page.
 
-A copy holds only what had loaded when it was taken, and a second window for what the first one missed is another visit to the site. So before the first window opens, work out how this page puts its content on screen, and handle each of these in that same cell:
+The browser profile stays signed in between runs, but a site can sign the user out at any time. On a site that needs the user to be signed in, the step's code must check it is signed in before it reads anything.
 
-- Content that loads as you scroll. Scroll it yourself, one screen at a time with a short wait after each, until the page stops growing and the part you need is there: a list that keeps adding rows and a section that only loads when it comes into view (the experience on a profile, the reviews on a product page) both need it, and one jump to the bottom can pass a section by.
-- Content that arrives after the page looks ready. Wait for the part you need to appear (`page.wait_for_selector` on its marker), not for a fixed time.
-- Content behind a control. A "see more" link, a "show all" button, a collapsed section, a tab or an accordion holds text that is not in the document until it is opened. Open each one the step needs before the copy.
-- Content on its own page. When the page shows a shortened list and links to the full one, the full list is the page this step opens.
+## Collect the content the user asked for
 
-Then check what came back before deciding it is complete: every page copy says how much of the page it had seen against the page's height, and the listing names every call the page made, folded by address and kind with the ids to unfold any row. When a part you need is missing, read the recording to find out why before asking for another window, and ask for one only with a change that fixes that reason.
+Before reading or scrolling, check that the page you expected has loaded, by looking for an element that only that page has.
 
-## One step is one kind of page
+Open a link the user gave you exactly as given, and do not change its query parameters yourself, except the one you change on purpose, such as the page number. Some links redirect to another address, for example a shared link, and the site may drop or change parameters on the way. After the page opens, check that it shows the content the link was meant to show, for example the right search results or the right profile, rather than checking the address.
 
-A browser step works on one kind of page: a list with its further pages, the profiles that list names, a thread and the reply in it. It may loop over as many pages of that kind as the work needs and act on each, and it opens no tabs. Getting something from one kind of page and acting on another is two steps: the first reads the list of contacts, the second opens each contact's profile from that list. The browser profile persists between steps, so the session carries over and the second step does not sign in again. Split that way, each step is small enough to re-test on its own, and a change to one never risks the other.
+Wait for the element that holds the content you need to appear. Do not only wait a fixed number of seconds.
 
-## Fetch once, parse separately: the browser is a live send
+To read a list from a page: count the items, scroll one screen, wait for the page to load, and count again. Stop when two scrolls in a row add no new items, or when you have as many items as the maximum setting. Do this whether or not you think the page loads more when scrolled, and whether or not you know how many items there are. Report the count after each scroll with `heartbeat()`, so a try shows whether the page loaded more.
 
-Opening the browser is a live send: the user's real Chrome and their real rate-limit budget. The browser cell's only job is bringing back the raw payload in one recorded run; all parsing and shaping iterates in a plain code cell chained through "$recorded". A window opens again when the next question needs the live page, such as whether scrolling loads more or how the next page of a list is fetched, and only after reading what the earlier windows kept. Each window's recording is numbered and kept beside the reason you gave for it until the build is done, so `"$recorded:har#2"` against `"$recorded:har#3"` compares the page scrolled and not scrolled. A probe cell, which belongs to no step yet, passes the address it opens as `url`. The plan step is `type: browser` (never a connector with a flag); it carries read_only, always true or false (true when it only reads the site, false when it sends anything there), the `url` its window opens, external_impact and no domains. A window will not open for a browser step that has not declared both read_only and url. Every window records everything by itself, in the cell and in the built step, every request and response and each page it settles on. Nothing about recording is yours to write.
+Scroll the way a person does. Many lists scroll inside their own panel, not the whole page, and the mouse wheel scrolls whatever is under the pointer, which starts at the window's top-left corner. Move the pointer to the middle of the element that holds the list (`page.mouse.move`), then turn the wheel (`page.mouse.wheel`), or scroll the last item into view. Never set a scroll position directly: a person cannot do that, and many pages load their next batch only when they are really scrolled.
 
-The recording is the page: every later check, parse or count reads the recorded HTML or HAR through "$recorded", and you open the page again only for something the recordings cannot show.
+After each scroll, check the count went up. If the first scroll adds nothing, check the list actually moved, and look in the HAR file for the request the page makes to load more, before you decide you have reached the end of the list.
 
-One probe cell, not four: work out the page's structure in a single pass, dumping the container, the repeated item, every candidate field and the link in one `evaluate`, then answer every follow-up question off that recorded dump in plain code cells.
+When you try a step that reads a list from one page, pass a maximum just above the number of items the page shows before any scrolling. The try then shows that the step reads the first items and that scrolling loads more. A real run collects up to the maximum the user set.
 
-## Scraping the page
+After such a try, the app compares the number of items with the maximum you passed. If the step returned exactly the maximum, you get a note: check that maximum was above the number the page shows before scrolling. If it returned fewer than the maximum, the page gave no more, and the user is asked whether that number is about what they expect. If it returned none at all, you get a note that the step is not reading the list yet.
 
-- The page you asked for is the page you scrape: after every goto, confirm it (the page or offset parameter survived, or the pagination marker matches) before reading. A mismatch is `unexpected_input`, never a quiet scrape of whatever loaded. A step given a link never rewrites its query parameters except the one it advances; replacing a deep page number with pages 1 to 4 re-harvests old results every run.
-- Prefer stable element attributes over text or CSS-path selectors, and read the whole map in one `evaluate`, never a locator per field.
-- Infinite feeds: scroll with stall detection, stopping after a number of rounds with no new items, never until a target is reached.
-- `heartbeat()` every iteration, saying how far you are: it shows live on the activity line, and a step dies only after 120 seconds of silence.
-- Exploration works on 2 items, passed as 2 for the step's maximum setting in the cell's inputs; the code reads that setting and never has the number written in.
-- Transient error pages exist: detect the marker, wait, reload, retry twice. A rate-limit or challenge page is not transient: stop, per page-state.
+When you try a step that works through several items (conversations, profiles, rows), first try it on 1 item and check the result has every field the step needs. When that works, try it on 2 items to check the loop. Pass these numbers as the step's maximum setting. Write the loop so the maximum counts every item the step works through, including items that gave nothing, so a try on 2 items never opens more than 2.
 
-## Partial results: a list degrades, it does not fail
+For every item, write what happened to it into the step's output: the data the step found, or the reason it found nothing (the item was empty, the profile was private, a sign-in page or captcha appeared, or the element the code looked for was not on the page). A try's result then shows why an item came back empty, and so does the summary of a real run. A real run works through every item and never stops early because some items gave nothing.
 
-Only on the expected page, after the page-state gate: 30 of 50 is a result, and you raise only when there is nothing, after retries. A short list from a captcha, login or block page is never a quiet day. Many pages is per-item work: `per_item` and `checkpoint()` per page.
+Open only the sections and controls the task needs. Use selectors that do not change between page loads, and read several attributes in one call instead of one call per field.
 
-## Failures name what the page showed
+## When to stop
 
-Every raise reports the observed state: the final URL, the title, which known marker was present (a login link, a challenge, an error banner), the items found. A bare "could not load" is undiagnosable.
+Stop collecting when you have what the user asked for (never more than the maximum setting), when you have reached the end of the list and checked it is the end, when two scrolls in a row add no new items, or when a time limit you set runs out with nothing new. Do not keep scrolling to reach a number, and do not keep going after you have enough items just to show there are no more.
 
-## What to test
+If the list stops growing before it reaches the maximum, do not assume it is complete: look in the HAR file for the request the page makes to load more.
 
-The recorded run is the evidence, plus authored parsing tests (this saved attribute map gives these fields). Never author a test that opens the browser.
+Call `heartbeat()` inside a loop to report progress, for example "opened 3 of 10 profiles". Every loop must still have an end.
 
-Docs: https://playwright.dev/python/docs/library
+Check the items you collected against what the user asked for, by their ids and their number. Each saved HTML file comes with how far down the page the window had scrolled (`seen`) and the page's full height (`height`). A list that only puts the rows on screen into the page can look complete when it is not, so treat these numbers as a hint, not as proof.
+
+If the step could not collect everything asked for, return what it collected only if the task allows partial results, and name what is missing. Otherwise stop the step with an error that says what it collected and what is missing.
+
+An empty result is valid when the page shows its own message for having nothing, for example "No messages". A sign-in page, a captcha or an error page is never an empty result.
+
+## Use what earlier windows saved
+
+Questions about page structure should be answered from data already collected. Only open a new window if the live page is needed or data is missing (such as what happens on a click, scroll, fresh load etc.).
+
+Each window during the build saves three files, numbered by window: the HAR file (every request and response), the page's HTML, and a list of every request the page made. The try's result names them under `$capture`. Read them before you open another window.
+
+To work out how to read the data, write a code try that opens no window: pass "$recorded:page" or "$recorded:har" as one of its inputs (add `#2` to use window 2's files, for example "$recorded:page#2"), read it with `read_input`, and change the reading code until it works. If you need several attempts to read the data correctly, make them in code tries like this, not by opening the site again each time. The same applies when you change a browser step that already works: if the change is only to how it reads what the page returned (an id comparison, a regular expression, which keys hold the next batch), try the new reading code in a code try on the last window's files first, and run the browser step again once, at the end, to confirm it on the live page.
+
+Reading that needs the live page, for example content that only appears after a click, stays in the browser step. A browser try does not have to return only raw HTML, and one window does not have to answer every later question.
+
+After the build, a step's results are only the outputs its code writes with `write_output`. The HAR files and HTML from the build's windows are deleted when the build finishes successfully. If a later step needs the raw HTML or JSON, the browser step must write it as one of its declared outputs. When a real run fails, the app saves that run's HAR file and HTML.
+
+There is no limit on how many windows you open. When you open another one because something you need is not in the saved files, say in the `reason` what is missing.
+
+## When a step fails, and testing
+
+When a browser step fails, say what it saw: the last page's address and title, whether the element it waited for was there, and how many items it had collected. Do not include cookies, signed links or private content that has nothing to do with the task.
+
+Do not reload or retry a page that shows a captcha or says you are sending too many requests. Follow "browser/page-state", which says when to ask the user to deal with it in the window.
+
+Keep the real result of each browser try: the app records it. Test the reading code against the saved HTML or HAR file in code tries. A test you write for a step never opens a browser.
+
+Playwright's own documentation: https://playwright.dev/python/docs/library

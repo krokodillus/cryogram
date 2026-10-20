@@ -78,6 +78,88 @@ class CallCounter:
             self.stats["batched_calls"] = \
                 (self.stats.get("batched_calls") or 0) + 1
 
+_BLOCK_KINDS = {"thinking": "thinking", "redacted_thinking": "thinking", "text": "text",
+                "tool_use": "tool_input", "server_tool_use": "tool_input"}
+
+_DELTA_FIELDS = {"thinking_delta": "thinking", "text_delta": "text",
+                 "input_json_delta": "partial_json"}
+
+# One debug-log line per model call from its own stream events: how long before it answered, thinking, writing and its output tokens
+class CallTimer:
+    def __init__(self, write, now, started: float, ctx_of=None):
+        self._write, self._now, self._ctx_of = write, now, ctx_of
+        self.last_done = started
+        self.cur: Optional[dict] = None
+        self.calls = 0
+
+    def tool_returned(self) -> None:
+        self.last_done = self._now()
+
+    # A tool of ours started, so the call's own time ends here even if its closing events come later
+    def tool_started(self) -> None:
+        if self.cur is not None and self.cur.get("tool_at") is None:
+            self.cur["tool_at"] = self._now()
+
+    def event(self, raw: dict) -> None:
+        kind, now = raw.get("type"), self._now()
+        if kind == "message_start":
+            self.finish(unfinished=True)
+            self.calls += 1
+            self.cur = {"call": self.calls, "start": now, "first": None, "blocks": {},
+                        "spent": {}, "chars": {}, "out": None, "stop": None,
+                        "waited": max(0.0, now - self.last_done)}
+            return
+        c = self.cur
+        if c is None:
+            return
+        if kind == "content_block_start":
+            block = _BLOCK_KINDS.get(str((raw.get("content_block") or {}).get("type") or ""), "other")
+            c["blocks"][raw.get("index")] = (block, now)
+            if c["first"] is None:
+                c["first"] = now
+        elif kind == "content_block_delta":
+            delta = raw.get("delta") or {}
+            field = _DELTA_FIELDS.get(str(delta.get("type") or ""))
+            open_ = c["blocks"].get(raw.get("index"))
+            if field and open_:
+                c["chars"][open_[0]] = c["chars"].get(open_[0], 0) + len(str(delta.get(field) or ""))
+        elif kind == "content_block_stop":
+            open_ = c["blocks"].pop(raw.get("index"), None)
+            if open_:
+                end = min(now, c.get("tool_at") or now)
+                c["spent"][open_[0]] = c["spent"].get(open_[0], 0.0) + max(0.0, end - open_[1])
+        elif kind == "message_delta":
+            c["out"] = ((raw.get("usage") or {}).get("output_tokens"))
+            c["stop"] = (raw.get("delta") or {}).get("stop_reason")
+        elif kind == "message_stop":
+            self.finish()
+
+    # Writes the call in flight; an open call at the turn's end is written as unfinished
+    def finish(self, unfinished: bool = False) -> None:
+        c, self.cur = self.cur, None
+        if c is None:
+            return
+        now = self._now()
+
+        end = min(now, c.get("tool_at") or now)
+        for block, began in c["blocks"].values():
+            c["spent"][block] = c["spent"].get(block, 0.0) + max(0.0, end - began)
+        line = {"call": c["call"], "waited_s": round(c["waited"], 1),
+                "first_out_s": round(c["first"] - c["start"], 1) if c["first"] else None,
+                "total_s": round(end - c["start"], 1),
+                **{f"{k}_s": round(v, 1) for k, v in c["spent"].items()},
+                **{f"{k}_chars": v for k, v in c["chars"].items()},
+                "output_tokens": c["out"], "stop_reason": c["stop"]}
+        if self._ctx_of is not None:
+            line["ctx"] = self._ctx_of()
+        if unfinished:
+            line["unfinished"] = True
+        self.last_done = now
+        try:
+            self._write(line)
+        except Exception:
+            pass
+
 # Argument size measured before the tool runs, so the gauge never counts what the harness filled in afterwards
 def measure_args(args) -> int:
     try:
@@ -235,6 +317,9 @@ def run_turn(workflow: dict, user_message: str, emit=None,
                 raise
         finally:
             _trail.end(pid)
+
+            from agent import interactions as _interactions
+            _interactions.park_workflow(pid)
     raise transport.TransportError("the builder could not start")
 
 def _short_tool(name: str) -> str:
@@ -376,6 +461,9 @@ def _sdk_tool_server(workflow: dict, emit, outcome: dict):
                   "node": orchestrator._tool_node(workflow, full, args)})
 
             chars_in = measure_args(args)
+            started = _time_now()
+            if outcome.get("call_timer") is not None:
+                outcome["call_timer"].tool_started()
             if name in _THREADED_TOOLS:
                 async with tool_lock:
                     env = await _aio.to_thread(
@@ -391,6 +479,8 @@ def _sdk_tool_server(workflow: dict, emit, outcome: dict):
 
             outcome["last_tool"] = name
             outcome["last_ok"] = bool(env.get("ok"))
+            if outcome.get("call_timer") is not None:
+                outcome["call_timer"].tool_returned()
             outcome["last_error"] = str(env.get("error") or "")
 
             note_tool_bytes(outcome, name, chars_in, env)
@@ -399,7 +489,8 @@ def _sdk_tool_server(workflow: dict, emit, outcome: dict):
                 b = (outcome.get("tool_bytes") or {}).get(name) or (0, 0)
                 chatlog.append(workflow["id"], "tool-result",
                                {"tool": name, "ok": bool(env.get("ok")),
-                                "error": str(env.get("error") or "")[:300],
+                                "error": str(env.get("error") or ""),
+                                "seconds": round(_time_now() - started, 1),
                                 "chars_in": outcome.get("last_chars_in", 0),
                                 "chars_out": outcome.get("last_chars_out", 0),
                                 "tool_chars_total": b[0] + b[1]})
@@ -432,7 +523,7 @@ def _sdk_tool_server(workflow: dict, emit, outcome: dict):
 # The SDK runs isolated: no filesystem settings, no memory files, a neutral working directory
 def sdk_option_kwargs(system, server, allowed, builtins, model, env,
                       max_turns, cli_path: str = "", effort: str = "",
-                      stderr=None) -> dict:
+                      stderr=None, debug_file: str = "") -> dict:
     return dict(
         system_prompt=system, mcp_servers={"cryogram": server},
         allowed_tools=allowed, tools=builtins, model=model,
@@ -445,7 +536,9 @@ def sdk_option_kwargs(system, server, allowed, builtins, model, env,
         **({"effort": effort} if effort else {}),
 
         **({"stderr": stderr} if stderr else {}),
-        extra_args={"no-session-persistence": None})
+
+        extra_args={"no-session-persistence": None,
+                    **({"debug-file": debug_file} if debug_file else {})})
 
 _turn_local = threading.local()
 
@@ -563,7 +656,8 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
         system, server, allowed, builtins, tr.model or None, env, max_turns,
         cli_path=sdk_program(), effort=_settings.builder_effort(),
         stderr=lambda line: chatlog.append(workflow["id"], "claude-stderr",
-                                           {"line": line})))
+                                           {"line": line}),
+        debug_file=chatlog.program_log_path(workflow["id"])))
 
     from agent import context as _context
     prompt_body = _context.build(workflow, user_message, kind)[0]["content"]
@@ -574,13 +668,28 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
     stopped = {"v": False}
     stats = {"rounds": 0, "t0": _time_now(), "usage": None}
     counter = CallCounter(stats)
+    timer = CallTimer(lambda line: chatlog.append(workflow["id"], "model-call", line),
+                      _time_now, stats["t0"], ctx_of=lambda: counter.ctx)
+    outcome["call_timer"] = timer
 
     async def _drive():
         async def _prompt():
             yield {"type": "user",
                    "message": {"role": "user", "content": prompt_body}}
-        agen = query(prompt=_prompt(), options=options)
+
+        from claude_agent_sdk._internal.transport.subprocess_cli import (
+            SubprocessCLITransport)
+        said = _prompt()
+        program = SubprocessCLITransport(prompt=said, options=options)
+        agen = query(prompt=said, options=options, transport=program)
         it = agen.__aiter__()
+
+        def _kill_program():
+            if program._process is not None:
+                try:
+                    program._process.kill()
+                except ProcessLookupError:
+                    pass
 
         asyncio.get_running_loop().set_exception_handler(
             lambda _l, ctx: chatlog.append(workflow["id"], "sdk-task-error", {
@@ -590,6 +699,7 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
             while True:
                 if turns.should_stop(workflow["id"]):
                     stopped["v"] = True
+                    _kill_program()
                     break
                 nxt = asyncio.ensure_future(it.__anext__())
                 while True:
@@ -597,6 +707,7 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
                     if nxt in done:
                         break
                     if turns.should_stop(workflow["id"]):
+                        _kill_program()
                         nxt.cancel()
                         try:
                             await nxt
@@ -612,6 +723,7 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
                     raw = msg.event or {}
                     counter.call_started(transport._call_start_usage(raw))
                     counter.call_ended(transport._call_end_usage(raw))
+                    timer.event(raw)
                     frag = transport._delta_text(raw)
                     if frag:
                         narrator.text(frag)
@@ -644,14 +756,20 @@ def _run_turn_sdk(workflow: dict, user_message: str, emit,
             turns.request_stop(workflow["id"])
             raise
         finally:
+            timer.finish(unfinished=True)
             try:
                 await agen.aclose()
             except Exception:
                 pass
 
+    failed = None
     try:
         asyncio.run(_drive())
-    except Exception as e:
+    except Exception as exc:
+        if not stopped["v"]:
+            failed = exc
+    if failed is not None:
+        e = failed
         low = str(e).lower()
         if "logged in" in low or "login" in low:
             raise transport.TransportError(NOT_SIGNED_IN) from e

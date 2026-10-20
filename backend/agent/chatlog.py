@@ -23,6 +23,15 @@ def append(workflow_id: str, kind: str, data: dict) -> None:
     except Exception:
         pass
 
+# A fresh file for one turn's Claude Code debug log, in a folder beside the workflow's debug log
+def program_log_path(workflow_id: str) -> str:
+    try:
+        d = config.DATA_DIR / "logs" / f"{workflow_id}.builder"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / time.strftime("%Y%m%d-%H%M%S.log"))
+    except Exception:
+        return ""
+
 # Rewrites the log files to remove a value that should never have been in them
 def redact(workflow_id: str, value: str, replacement: str) -> None:
     try:
@@ -33,7 +42,9 @@ def redact(workflow_id: str, value: str, replacement: str) -> None:
         esc = json.dumps(value)[1:-1]
         if esc != value:
             forms.append((esc, json.dumps(replacement)[1:-1]))
-        for path in (d / f"{workflow_id}.jsonl", d / f"{workflow_id}.1.jsonl"):
+        program_logs = sorted((d / f"{workflow_id}.builder").glob("*.log")) \
+            if (d / f"{workflow_id}.builder").is_dir() else []
+        for path in [d / f"{workflow_id}.jsonl", d / f"{workflow_id}.1.jsonl", *program_logs]:
             if not path.exists():
                 continue
             text = path.read_text(encoding="utf-8")

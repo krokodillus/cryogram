@@ -41,6 +41,10 @@ PLAN_INPUT_SCHEMA = {
                 "description": {"type": "string"},
                 "read_only": {"type": "boolean"},
                 "url": {"type": "string"},
+                "max_setting": {"type": "string",
+                                "description": "A reading browser or connector step that collects a list names the number input holding its maximum number of records; the user is asked for that number once."},
+                "per_run_reason": {"type": "string",
+                                   "description": "A user-input step with no inputs asks the user on every run: one sentence saying why, for example that each run works on a new invoice. A field on the step, never an input."},
                 "inputs": {"type": "array", "items": {"type": "object"}},
                 "outputs": {"type": "array", "items": {"type": "object"}},
                 "domains": {"type": "array", "items": {"type": "string"}},
@@ -48,7 +52,7 @@ PLAN_INPUT_SCHEMA = {
             },
             "required": ["name", "type"]}},
         "edges": {"type": "array",
-                  "description": "The lines: which step follows which. REQUIRED whenever the save carries the plan's steps - every step of two or more needs at least one line (from each step to the one that follows it; a step needing two earlier ones gets a line from each), and a save without them is refused. Leave the key out on a save that carries only a changed step, so the saved lines stay; an edges list that is present replaces every line.",
+                  "description": "Dependency edges, not port mappings. Include the intended graph on first save (one step needs no edge); connect producers to consumers and independent branches to their join. On amendments omit edges to retain the saved graph; an explicit list replaces all edges. Follow reported graph gaps before building.",
                   "items": {
             "type": "object",
             "properties": {"src": {"type": "string"}, "dst": {"type": "string"},
@@ -269,6 +273,25 @@ def step_by_ref(workflow: dict, plan: Optional[dict], ref) -> Optional[dict]:
     want = humanise_name(ref)
     return next((n for n in steps
                  if humanise_name(str(n.get("name") or "")) == want), None)
+
+# The name of the step a reference points at, by id or by name; anything else humanised
+def step_name_for(workflow: dict, ref) -> str:
+    hit = step_by_ref(workflow, None, ref)
+    if hit is not None and str(hit.get("name") or "").strip():
+        return str(hit["name"])
+    return humanise_name(str(ref or ""))
+
+# The steps a reference could have meant, for a refusal naming one that does not exist
+def steps_that_exist(workflow: dict, plan: Optional[dict] = None) -> str:
+    seen, rows = set(), []
+    for n in list((plan or workflow.get("plan") or {}).get("nodes") or []) \
+            + list(workflow.get("nodes") or []):
+        sid, nm = str(n.get("id") or ""), str(n.get("name") or "")
+        if (sid, nm) in seen or not (sid or nm):
+            continue
+        seen.add((sid, nm))
+        rows.append(f"{sid} ({nm})" if sid and nm else sid or nm)
+    return ("the steps are: " + ", ".join(rows)) if rows else "there are no steps yet - save_plan first"
 
 # The id a step reference stands for, or "" when nothing has it yet
 def step_id_for(workflow: dict, ref, plan: Optional[dict] = None) -> str:
@@ -568,6 +591,10 @@ def fill_from_cells(workflow_id: str, nodes: list) -> list:
             rec = _cells.latest_ok_for(workflow_id, n, kind="ai")
             if rec:
                 changed = False
+
+                if not str(n.get("prompt") or "").strip() and str(rec.get("code") or "").strip():
+                    n["prompt"] = rec["code"]
+                    changed = True
                 if not n.get("tests"):
                     n["tests"] = [{"name": "recorded example", "expect": "ok",
                                    "inputs": rec.get("inputs") or {}}]
@@ -928,8 +955,10 @@ def opening_card_payload(workflow: dict, plan: dict, head: str) -> dict:
             "changes": (changes_to_names(workflow, plan)
                         if workflow.get("nodes") else {}),
             **({"fix_note": plan["fix_note"]} if isinstance(plan.get("fix_note"), dict) else {}),
+
             **({"change_note": plan["change_note"]}
-               if isinstance(plan.get("change_note"), dict) and workflow.get("nodes") else {}),
+               if isinstance(plan.get("change_note"), dict)
+               and (workflow.get("nodes") or plan_card_seen(workflow)) else {}),
             "warnings": list(dict.fromkeys((plan.get("warnings") or [])
                                            + (plan.get("_done_warnings") or []))),
             "packages": packages,
@@ -943,6 +972,18 @@ def opening_card_payload(workflow: dict, plan: dict, head: str) -> dict:
 
             **(_plan_diff_keys(workflow, plan) if head == "plan" else {})}
 
+# A change note as the two lines the card shows, for the chat when no card shows it
+def note_lines(note: dict) -> str:
+    found = str((note or {}).get("found") or "").strip()
+    what = str((note or {}).get("will_change") or "").strip()
+    return "\n".join(x for x in (found and f"What I found: {found}",
+                                  what and f"What will change: {what}") if x)
+
+# Whether the person has been shown a plan card yet: the very first opening card carries no change note
+def plan_card_seen(workflow: dict) -> bool:
+    return any(i.get("kind") == "request" and i.get("request") == "blueprint"
+               for i in workflow.get("transcript") or [])
+
 # The card's two lists when the steps differ from the approved ones, each only when it has something in it
 def _plan_diff_keys(workflow: dict, plan: dict) -> dict:
     if not plan_steps_need_approval(workflow, plan):
@@ -952,8 +993,7 @@ def _plan_diff_keys(workflow: dict, plan: dict) -> dict:
             **({"plan_removed": diff["removed"]} if diff["removed"] else {}),
             **({"plan_added": diff["added"]} if diff["added"] else {})}
 
-DONE_LINES = ["Done - built and checked.",
-              "If something goes wrong, I'll pause the run and help you fix it."]
+DONE_LINES = ["If something goes wrong with a run, it will pause and I'll help you fix it. A checkpoint will be stored on your computer so you can keep going from where it stopped."]
 
 # One step's test status in the user's words: Tested, or the honest reason it was not
 def _step_test_label(workflow: dict, n: dict) -> str:
@@ -1042,6 +1082,38 @@ CARD_WAITING = (
 OUTSIDE_SCOPE = (
     "the approved change names {scope}, and \"{name}\" is not among them - save_plan again adding it under changes (modified or added) and update the note; the card asks once more, and then you work it.")
 
+# Whether this step is one an approved change or fix names
+def in_approved_change(workflow: dict, name: str) -> bool:
+    plan = workflow.get("plan") or {}
+    approved = plan.get("fix_approved_ts") if fix_in_progress(workflow) else plan.get("change_approved_ts")
+    scope = {humanise_name(str(x)) for x in plan.get("approved_changes") or [] if str(x).strip()}
+    return bool(approved and humanise_name(str(name or "")) in scope)
+
+# Whether a try of this step meets an approved change that does not name it yet
+def outside_change_scope(workflow: dict, name: str) -> bool:
+    plan = workflow.get("plan") or {}
+    approved = plan.get("fix_approved_ts") if fix_in_progress(workflow) else plan.get("change_approved_ts")
+    scope = {humanise_name(str(x)) for x in plan.get("approved_changes") or [] if str(x).strip()}
+    return bool(approved and scope and humanise_name(str(name or "")) not in scope)
+
+# Adds a step the builder is trying to the declared change, with its reason, so the card can show the wider change
+def widen_change(workflow: dict, name: str, reason: str = "") -> None:
+    plan = workflow.get("plan") or {}
+    hit = step_by_ref(workflow, plan, name)
+    ref = str((hit or {}).get("id") or name)
+    built = any(str(n.get("id")) == ref or n.get("name") == name for n in workflow.get("nodes") or [])
+    ch = plan.get("changes") if isinstance(plan.get("changes"), dict) else {}
+    key = "modified" if built else "added"
+    ch[key] = list(ch.get(key) or []) + ([ref] if ref not in (ch.get(key) or []) else [])
+    plan["changes"] = ch
+    reason = str(reason or "").strip()
+    note_key = "fix_note" if fix_in_progress(workflow) else "change_note"
+    note = plan.get(note_key) if isinstance(plan.get(note_key), dict) else None
+    if reason and note is not None:
+        before = str(note.get("will_change") or "").strip()
+        note["will_change"] = (before + " " + reason).strip() if before else reason
+    workflow["plan"] = plan
+
 # Why a try of a changed step is refused on a built workflow, or None when the change covers it
 def change_scope_refusal(workflow: dict, name: str, what: str = "how the step works") -> Optional[str]:
     plan = workflow.get("plan") or {}
@@ -1124,6 +1196,7 @@ def merge_amend(prev: dict, patch: dict) -> dict:
             n["name"] = humanise_name(n["name"])
     out_nodes = []
     used: list = []
+    prev_ids = {pn.get("id") for pn in prev.get("nodes") or [] if pn.get("id")}
     for pn in prev.get("nodes") or []:
         hit = next((n for n in patch_nodes
                     if (n.get("id") and n.get("id") == pn.get("id"))
@@ -1132,7 +1205,12 @@ def merge_amend(prev: dict, patch: dict) -> dict:
         if hit is not None:
             used.append(hit)
 
-            out_nodes.append({**dict(pn), **hit})
+            merged_node = {**dict(pn), **hit}
+
+            if pn.get("id") and hit.get("id") != pn.get("id") \
+                    and hit.get("id") not in prev_ids:
+                merged_node["id"] = pn["id"]
+            out_nodes.append(merged_node)
         else:
             out_nodes.append(dict(pn))
     for n in patch_nodes:
@@ -1156,6 +1234,17 @@ def merge_amend(prev: dict, patch: dict) -> dict:
 
     if patch.get("edges"):
         merged["edges"] = patch["edges"]
+    elif removed:
+        gone = {str(pn.get("id")) for pn in prev.get("nodes") or []
+                if str(pn.get("id") or "") in removed
+                or humanise_name(str(pn.get("name") or "")) in removed} - {""}
+        gone |= {humanise_name(str(pn.get("name") or "")) for pn in prev.get("nodes") or []
+                 if str(pn.get("id") or "") in gone}
+        gone |= removed
+        merged["edges"] = [e for e in merged.get("edges") or []
+                           if not ({str(e.get("src") or ""), str(e.get("dst") or ""),
+                                    humanise_name(str(e.get("src") or "")),
+                                    humanise_name(str(e.get("dst") or ""))} & gone)]
     if str(patch.get("summary") or "").strip():
         merged["summary"] = patch["summary"]
     present = {humanise_name(str(n.get("name") or "")) for n in out_nodes} \
@@ -1340,6 +1429,9 @@ def declined_steps(workflow: dict) -> set:
         if item.get("kind") != "request" or item.get("request") != "approval":
             continue
         pl = item.get("payload") or {}
+
+        if pl.get("holds") == "person":
+            continue
         ans = answers.get(item.get("iid"))
         if ans is None or ans.get("shown") not in ("deny", "allow", "always"):
             continue

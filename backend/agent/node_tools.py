@@ -241,7 +241,12 @@ def tool_read_node(workflow: dict, node_id: str = "",
         return {"error": "name the step to read: node_id=\"<name or id>\", or node_ids=[...] for several at once"}
     node = find_node(workflow, node_id)
     if not node:
-        return {"error": f"no node {node_id!r}"}
+        planned = steps.step_by_ref(workflow, None, node_id)
+        if planned is None:
+            return {"error": f"no node {node_id!r}; " + steps.steps_that_exist(workflow)}
+        return {"ok": True, "planned": True,
+                "node": {k: v for k, v in planned.items() if k not in _READ_NODE_DROP},
+                "note": "this step is planned and not built yet; its plan entry is shown"}
     out = {k: v for k, v in node.items() if k not in _READ_NODE_DROP}
     for side in ("inputs", "outputs"):
         if node.get(side):
@@ -264,8 +269,8 @@ def _create_node(workflow: dict, name: str, type: str, description: str = "",
     if type not in PORT_TYPE_NAMES:
         return {"error": f"type must be one of {sorted(PORT_TYPE_NAMES)}, not {type!r} "
                          "(a node is exactly one type, never mixed)"}
-    if type in OUTSIDE_TYPES and not external_impact.strip():
-        return {"error": "a connector or browser step must declare external_impact - a plain-language description of what it does outside the workflow, for the user to approve"}
+    if type in OUTSIDE_TYPES and not read_only and not external_impact.strip():
+        return {"error": "a connector or browser step that writes must declare external_impact - a plain-language description of what it changes outside the workflow, for the user to approve"}
     node = Node(name=name, type=NodeType(type), description=description,
                 intention=intention.strip())
     d = asdict(node)
@@ -592,6 +597,16 @@ _TEXT_MIMES = ("application/json", "application/xml", "application/csv",
 _SAMPLE_CAP = 60_000
 
 def tool_read_sample(workflow: dict, name: str) -> dict:
+    matches = [s for s in fresh_samples(workflow) if s.get("name") == name]
+    if len({s.get("ref") for s in matches}) > 1:
+        return {"error": f"sample name {name!r} is ambiguous; use the refs from list_samples"}
+    result = _read_sample_content(workflow, name)
+    if matches and not result.get("error"):
+        result.update({"ref": matches[0]["ref"],
+                       "input_hint": "Pass this ref as the value of the declared file input to run_cell or run_ai_step; the name is only its label."})
+    return result
+
+def _read_sample_content(workflow: dict, name: str) -> dict:
     s = next((s for s in fresh_samples(workflow) if s.get("name") == name), None)
     if not s:
         have = [x.get("name") for x in fresh_samples(workflow)]
@@ -1000,6 +1015,12 @@ def tool_build_workflow(workflow: dict,
         return {"error": "these steps have ports with no type yet - "
                          + "; ".join(untyped) + ". " + UNTYPED_PORTS}
 
+    from agent import plan_save as _plan_save
+    gaps = _plan_save.gaps_now(workflow, plan)
+    if gaps:
+        plan["design_gaps"] = gaps
+    else:
+        plan.pop("design_gaps", None)
     if plan.get("design_gaps"):
         return {"error": "the plan still has open design gaps: "
                          + "; ".join(plan["design_gaps"])
@@ -1022,6 +1043,11 @@ def tool_build_workflow(workflow: dict,
         return {"error": "these steps have not been tested for real yet: "
                          + ", ".join(f'"{u}"' for u in untested)
                          + ". Run each one as run_cell NOW, in this same turn - the recorded runs become the steps' code and tests - then call build_workflow again. A live send or a browser window raises its own approval card from the cell; a no there settles that step (it counts as done). Do not pre-ask with ask_user."}
+    from agent import build_readiness
+    readiness = build_readiness.check(workflow, plan)
+    if readiness:
+        return {"error": "Build readiness: " + " | ".join(readiness),
+                "readiness_findings": readiness}
 
     turnstate.of(workflow).build_now = {"include_proposals": list(include_proposals)
                              if include_proposals else None}
@@ -1159,6 +1185,12 @@ def build_step(workflow: dict, name: str) -> dict:
         else:
             (node.get("config") or {}).pop("per_item", None)
 
+        ms = str(pn.get("max_setting") or "").strip()
+        if ms:
+            node.setdefault("config", {})["max_setting"] = ms
+        else:
+            (node.get("config") or {}).pop("max_setting", None)
+
         paths = [str(x).strip() for x in (pn.get("paths") or []) if str(x).strip()]
         if paths:
             node.setdefault("config", {})["paths"] = paths
@@ -1224,7 +1256,7 @@ def tool_resolve_issue(workflow: dict, ticket_id: str = "") -> dict:
     live = fix_in_progress(workflow)
     if live and (not ticket_id or ticket_id == live):
         return {"error": f"issue {live} is already being fixed in this "
-                         "conversation. Save the plan (save_plan - the user sees the diagnosis and approves it), then build_workflow."}
+                         "conversation. Save the plan with fix_note {went_wrong, will_change} and changes naming the steps you will change, wait for the user's click on the card, then work those steps and build."}
     open_tickets = [t for t in (workflow.get("tickets") or [])
                     if t.get("status") == "open"]
     if not open_tickets:
@@ -1249,11 +1281,12 @@ def tool_close_issue(workflow: dict, ticket_id: str, resolution: str,
     if not t:
         return {"error": f"No issue {tid!r}. Open issues: "
                          + (", ".join(t["id"] for t in workflow.get("tickets") or []
-                                      if t.get("status") in ("open", "in-progress"))
+                                      if t.get("status") in ("open", "investigating", "in-progress"))
                             or "none")}
-    if t.get("status") not in ("open", "in-progress"):
-        return {"error": f"Issue {tid} is {t.get('status')} - only an open or "
-                         "in-progress issue can be closed this way."}
+
+    if t.get("status") not in ("open", "investigating", "in-progress"):
+        return {"error": f"Issue {tid} is {t.get('status')} - only an open, "
+                         "investigating or in-progress issue can be closed this way."}
     res = str(resolution or "").strip()
     if res not in ISSUE_RESOLUTIONS:
         return {"error": "resolution must be one of "
@@ -1396,7 +1429,8 @@ def tool_run_ai_step(workflow: dict, name: str, prompt: str, model: str = "",
 
     if not str(name or "").strip():
         return {"error": "name the ai step"}
-    name = humanise_name(name)
+
+    name = steps.step_name_for(workflow, name)
     if not str(prompt or "").strip():
         return {"error": "an ai step needs a prompt"}
     gate_note = skeleton_first(workflow)
@@ -1407,18 +1441,15 @@ def tool_run_ai_step(workflow: dict, name: str, prompt: str, model: str = "",
         return {"error": gate_note}
     gate_note = _proposal_first(workflow, name, prompt)
     if gate_note:
-        return {"error": gate_note}
+        return {"error": gate_note, **({"widen_change": name}
+                                       if steps.outside_change_scope(workflow, name) else {})}
     import time as _time
     from agent import cells as _cellmod
     recorded = _cellmod.latest_outputs(workflow["id"])
-    fixed_in = {}
-    for k, v in (inputs or {}).items():
-        if isinstance(v, str) and v.startswith((RECORDED_PREFIX, ISSUE_PREFIX)):
-            v, err = resolve_recorded(k, v, recorded, issue_case_inputs(workflow))
-            if err:
-                return {"error": err}
-        fixed_in[k] = v
-    inputs = fixed_in
+    from agent import input_refs
+    inputs, error = input_refs.resolve(workflow, inputs, recorded)
+    if error:
+        return {"error": error}
 
     if seed_file_kinds(workflow, name, inputs):
         save(workflow)
@@ -1495,7 +1526,9 @@ def tool_run_ai_step(workflow: dict, name: str, prompt: str, model: str = "",
                                  source="build")
             except Exception:
                 pass
-        problems = _ports.check_ports(ports, out, require_all=True) if ports else []
+
+        problems = _ports.check_ports(ports, out, require_all=True,
+                                      empty_ok=True) if ports else []
         if problems:
             ok, result = False, {
                 "ok": False,
@@ -1622,58 +1655,58 @@ def tool_ask_user(workflow: dict, question: str, options: Optional[list] = None,
     return out
 
 _SAMPLE_SPECS = [
-    ("list_samples", tool_list_samples, "List the workflow's uploaded sample documents (name/mime/size/shared_ts/link). When you refer to an earlier upload in chat or a question, include its markdown link - [name](link) - so the user can reopen the exact file you mean.", {}),
-    ("read_sample", tool_read_sample, "Read one sample by name: text content inline (capped), binary as a filesystem path.", {"name": str}),
+    ("list_samples", tool_list_samples, "List the samples the user uploaded, each with its name, stored file reference (ref), file type, size and download link. Use this list instead of asking again, and include the link when you mention an upload.", {}),
+    ("read_sample", tool_read_sample, "Read a sample by its name. Returns a preview, cut short for a long file, with the sample's stored file reference (ref) and an input_hint. Pass the ref to a file input: the preview and a path are not the file reference. To read the parts of a long file the preview leaves out, read them in a try.", {"name": str}),
 ]
 
 _AGENT_SPECS = [
-    ("list_nodes", tool_list_nodes, "List the workflow's nodes (summary).", {}),
-    ("read_earlier_result", tool_read_earlier_result, "Open a tool result whole, or one part of it. The working memory lists every earlier result as one line with its id, and a result too big to ride inline came back as its outline with its id (result_id); pass that id (or ids=[...] for several) instead of running the same work again. path walks into the result (data.output.rows[3]); find keeps only the entries, keys or lines that contain the text; offset and limit slice a list or a text. A part still too big is outlined again: walk one level further.",
+    ("list_nodes", tool_list_nodes, "List the workflow's built steps, with a short summary of each.", {}),
+    ("read_earlier_result", tool_read_earlier_result, "Open an earlier tool result in full, or one part of it. The working memory at the start of a turn lists every earlier result as one line with its id, and a result too big to send whole came back as an outline with its result_id. Pass that id (or ids=[...] for several) instead of doing the same work again. path goes into the result (for example data.output.rows[3]); find keeps only the entries, keys or lines that contain the text; offset and limit take a slice of a list or a text. A part that is still too big comes back as an outline again: go one level further in.",
      {"id": str, "ids": list, "path": str, "find": str, "offset": int, "limit": int}),
-    ("read_node", tool_read_node, "Read a built node whole: its ports, code/prompt and settings. Pass node_ids=[...] to read SEVERAL in one call - never one lookup per round trip. Test fixtures come back as shapes, not recorded values.",
+    ("read_node", tool_read_node, "Read a step's inputs and outputs, its code or prompt, and its settings, whether it is built or only planned. Pass node_id, or node_ids to read several steps at once. Test examples come back as their shapes, not their recorded values.",
      {"node_id": str, "node_ids": list}),
     *_SAMPLE_SPECS,
 
-    ("share_file", tool_share_file, "Share a produced FILE with the user as a download card in chat (a draft deck, a generated document). ALWAYS share the output before asking for feedback on it - never ask about something the user cannot see. path = the blob: reference a cell's write_file returned (the normal route - cells are how files get made), or a file in your working directory; label = the plain name the user sees.",
+    ("share_file", tool_share_file, "Show a file a step made as a download card in the chat. path is the blob reference returned by write_file, or a file in the allowed working folder; label is the name the user sees. Show the user the real result before you ask what they think of it.",
      {"path": str, "label": str}),
-    ("save_learning", tool_save_learning, "Record something you PROVED about how something works - an approach that failed and what that taught, a system's real behaviour, a correction the user made about method. PROVEN ONLY: the claim must have held up when acted on (the fix worked; the behaviour reproduced with a clean setup) - a hypothesis mid-investigation is NOT a learning; save it when it survives. Notes queue with this build and publish to every workflow only when the build goes GREEN. The TITLE names the SITUATION it applies to ('LinkedIn sessions expire when the browser window closes'), because that is what a later build sees when deciding to read it; the first line says WHEN it applies. Notes are shared across every workflow, so write for someone who has never seen this one: no workflow names, no links, ids or addresses from this workflow's settings, never a credential (all refused). Same title overwrites - a learning that later proves wrong is re-saved as the verified truth under a TRUE title, never a 'retracted' note under the false one.",
+    ("save_learning", tool_save_learning, "Save a finding you confirmed that holds for other workflows too; it is published when the build finishes successfully. title names the situation it applies to; content says under which conditions it holds and what showed it, never a theory you have not tried. Saving under the same title replaces the old learning. Never include workflow names, private links, ids, setting values or credentials; facts about this task go in save_intent.",
      {"title": str, "content": str}),
 
-    ("import_recording", tool_import_recording, "Import a captured browser recording (HAR / capture JSON) as a SCRUBBED recording sample - credential values become shape descriptors, the auth field survives for mining (25-recordings). from_blob = the ref write_file returned for a capture file; from_sample = an uploaded sample's name (the raw original is replaced). The file must be the captured JSON unchanged and hold calls or actions, so the recording starts before the task and stops after it. Returns the hostnames touched - fold them into the plan's domains.",
+    ("import_recording", tool_import_recording, "Import a HAR file or capture JSON, unchanged, as a recording sample with logins and passwords masked. Use from_blob for a file reference a try saved, or from_sample for the name of a sample the user uploaded (the recording replaces that sample). Returns the hosts the recording contacted, to look into; declare only the hosts the task needs, not every analytics or page-file host. A recording that holds no calls or actions is refused.",
      {"name": str, "from_blob": str, "from_sample": str}),
-    ("read_cases", tool_read_cases, "Bounded read of a node's stored corpus cases (real past inputs/outputs/verdicts) - design changes and diagnose failures against these, never by running the saved process. outcome filters all|success|failure (NOT the node type).",
+    ("read_cases", tool_read_cases, "Read a few of a step's recorded cases: the real inputs, outputs and verdicts of earlier runs. Design changes and find the cause of failures from these, never by running the saved workflow. outcome filters by all, success or failure (not by the kind of step).",
      {"node_id": str, "outcome": str, "limit": int}),
-    ("diagnose_case", tool_diagnose_case, "Record your diagnosis of a stored failure BEFORE designing the fix: the cause and its CLASS (what general property of the input failed, not this instance).",
+    ("diagnose_case", tool_diagnose_case, "Record on a failed case the cause you found, and the supported class/conditions under which it happens; add the fix when you know it. Never claim more certainty than you have, and never turn one failure you could not explain into a rule for every case.",
      {"node_id": str, "case_id": str, "cause": str, "cls": str, "fix": str}),
-    ("query_corpus", tool_query_corpus, "Ask the corpus a precise question: ONE read-only SELECT over cases(node_id, case_id, run_id, kind, ts, input_hash, cls, cause, inputs, output, verdict, observed, meta) / diagnoses(case_id, cause, cls, fix) / run_paths(workflow_id, run_id, path). Payload columns are JSON text (use json_extract). Row-capped; prefer counts/clusters/contrast sets over dumping rows.", {"sql": str}),
-    ("corpus_summary", tool_corpus_summary, "Whole-workflow corpus overview (per node: successes/failures/undiagnosed/classes/dominant structures). Call ONCE at the end of every turn (see the 08-when-a-run-failed skill); anything noteworthy becomes plan proposals, never direct action.", {}),
-    ("run_node", tool_run_node, "Run ONE code/ai node in isolation on a sample or corpus input (diagnosis/change-design only). Never connectors; never a workflow runner - a saved workflow runs only via the Run button.",
+    ("query_corpus", tool_query_corpus, "Ask the recorded cases one precise question: one read-only SELECT over cases(node_id, case_id, run_id, kind, ts, input_hash, cls, cause, inputs, output, verdict, observed, meta) / diagnoses(case_id, cause, cls, fix) / run_paths(workflow_id, run_id, path). The inputs, output, verdict, observed and meta columns hold JSON text (use json_extract). The number of rows returned is capped: ask for counts, groups and comparisons rather than printing rows.", {"sql": str}),
+    ("corpus_summary", tool_corpus_summary, "Return the number of recorded cases for the whole workflow, their classes and the most common shapes. Use it when that overview helps you find a cause or the user asked for a review, never as a call you make at the end of every turn. What it shows does not allow you to change anything.", {}),
+    ("run_node", tool_run_node, "Run one code or AI step of the built workflow on its own, on a sample or a recorded input, only to find a cause or to design a change. Never connectors, and never the whole workflow: a saved workflow runs only when the user presses Run.",
      {"node_id": str, "sample_input": dict}),
-    ("preview_run", tool_preview_run, "Dry-walk the saved workflow WITHOUT running it: step by step, where a run pauses (approval cards, mid-run questions), where each input comes from, and any step that cannot receive a value. Use THIS to answer 'what happens when the user runs it' - never ask the user to run and describe their screen.", {}),
-    ("run_cell", tool_run_cell, "Run one STEP'S worth of work for real in the production sandbox and RECORD it (code + inputs + observed output). Name the cell like the step it will become: at save_plan/build a same-named code step is auto-filled with this cell's code and its recorded run as the first test. Use read_input/write_output/get_secret exactly as node code does. FILE inputs: pass the sample's NAME or blob ref from list_samples - never a filesystem path. A step may touch only its own scratch, the folders on the workflow's folder settings, and the folders its plan step declares in `paths` (the user is asked once per folder) - anything else on the computer is refused. CHAIN steps: pass \"$recorded\" as an input value to use the latest recorded output of that name from an earlier cell, or \"$recorded:<name>\" to take an earlier output under a different name (a sample-prep cell's `ref` into this step's `expense_file`). A stored SETTING is not chained - the code reads it by name (read_input) and the cell is given it exactly as a run would be: the workflow's own values and its attached environments', secrets included (get_secret); a get_secret name must be a secret this workflow or an attached environment stores. Never pass or copy a value the workflow already holds. A window belongs to a BROWSER step: name the cell after a step the plan declares as type \"browser\", or, for a probe cell belonging to no step yet, pass browser=true. No other type may open one, whatever its code says. A cell whose code already ran OK answers from its recording instead of re-running (fresh=true ONLY when the user asked for fresh live data). A re-fetch of a READ connector step with a recorded run is REFUSED to the recording - parsing/checking iterates on \"$recorded\" with no live call; only when the recordings genuinely lack the data (a changed fetch included), re-send with missing=\"<one sentence: what data is not in the recordings>\". A BROWSER window may open as often as the work needs (scrolled and not scrolled, one page of a list and the next): read what earlier windows kept first, and say what each window is for in `reason`. Every window's recording is numbered and kept beside that reason: chain \"$recorded:har#3\" for window 3's traffic; in the cell, read_input returns it already parsed, and read_input(name, path=True) gives a file path when a library wants one. A probe browser cell passes url=\"https://...\" for the address it opens (a browser plan step declares its `url`). A step the user DECLINED to try live is done - never re-run it. If it has become genuinely necessary, re-send with ask_again=\"<one sentence: why it matters now>\" and the user is asked once more, with that sentence; their answer decides, and a no settles it again. SEVERAL TRIES IN ONE CALL: pass cells=[{name, code, inputs?, packages?, reason?, browser?, url?}, ...] for cells that read nothing from each other (each starts from stored values or earlier recordings, never from another cell of the same call - such a cell is refused, and runs after in its own call); they run together, browser cells one at a time, each result comes back under its name in the order given, and a card one of them needs is asked as usual. Every input and output of the step has its type before it is tried (the try is judged as a run). Before the code runs it is checked whole: a syntax error, a name never defined, and an import neither declared in `packages` nor installed are all reported in one answer, and the cell does not run. Cell code speaks only the cell surface (read_input, write_output, get_secret, write_file, heartbeat, checkpoint), never a workflow tool and never an import of that surface. Never re-run a step's code under a new name: a renamed cell orphans the recorded evidence, and a cell under a step's name writes that step's outputs (a diagnostic takes its own plain name). A cell that changes how a BUILT step works waits for the change card: save_plan with the change and its note first. `reason` = ONE plain sentence for the user: what this run is for - REQUIRED for any browser launch or re-fired write connector, and always shown for a probe cell. Never ai_call here - use run_ai_step.",
+    ("preview_run", tool_preview_run, "Walk through the saved workflow step by step without running it: where a run pauses (approval popups, questions during the run), where each input comes from, and any step that cannot get a value. Use this to answer 'what happens when the user runs it', and never ask the user to run it and describe their screen.", {}),
+    ("run_cell", tool_run_cell, "Run a code, connector or browser step for real in the same sandbox a run uses, and record the try. Save the step in the plan, with typed inputs and outputs, before you try it. Give the try the step's name or its id, so its code and result become the step's code and first test; a try that only looks at something gets its own name and a reason, and a try in a step's name that writes none of the step's outputs runs as such a try under its own name. Leave code out to run the step's own code again with new inputs. In the code, use only the functions listed at the top of these instructions: never call your own tools or ai_call there. Saved settings, and secrets named in the code, are filled in for you. inputs gives values for this one try: a sample, a smaller number in place of a setting, or the output of an earlier try: '$recorded' for the output with the same name, '$recorded:name' for another output, '$recorded:har#3' for window 3's HAR file. A value in inputs is not saved as a setting. A file input takes a sample's name or stored file reference, not a path into the app's storage. packages declares the libraries the code imports. A browser step of the plan gives its url in the plan; a browser try that is not a plan step passes browser=true and url. The app opens and closes the window, and asks the user on a card before a window opens, before a send, and before a new folder or host is used. reason is one sentence the user reads: it is required for a try that opens a window or sends again, and shown for a try that only looks at something. A try whose code has not changed since it worked returns its recorded result; pass fresh=true only when the user asked for fresh data. A recorded read is fetched again only when data you need is missing from it: say in missing what is missing. Do not try again something the user said no to; ask_again is only for a really new need, and says why. cells=[{name,code,inputs?,packages?,reason?,browser?,url?},...] runs tries that do not depend on each other together: no try may read the output of another try in the same call. Never put unrelated sends in one call. Changing a step of a built workflow needs the user's approval of its declaration first; a try of a step the approved change does not name adds it to the change, with the try's reason, and shows the user the card again, and the try runs on their click. A try is judged as a run: its inputs and outputs pass the run's own checks, and it gets only the step's declared inputs, so every name its code reads is one of them. A syntax error, an undefined name, a missing library, a wrong call to a function and an undeclared input are all reported in one answer, before the code runs. Returns ok and the output or recorded result, or the error and what is still needed; a card waiting for an answer is not success. A name passed to get_secret must be a stored secret. Never run a step's code again under a new name to get past a refusal: the recorded try belongs to the step's name.",
      {"name": str, "code": str, "inputs": dict, "packages": list,
       "fresh": bool, "reason": str, "missing": str, "ask_again": str,
-      "url": str, "cells": list}),
-    ("run_ai_step", tool_run_ai_step, "Try an AI step for real (same enforced-shape path a run uses) and RECORD it: prompt about the TASK, model from Admin (provider too, when the user named one), inputs (\"$recorded\" chains from earlier cells), outputs = the declared output ports. The try seeds the same-named ai plan step's example, and later cells chain from its real output. An unchanged try (same prompt, inputs, model and output ports) answers from the recording instead of running again (fresh=true ONLY when the user asked for a fresh answer).",
+      "browser": bool, "url": str, "cells": list}),
+    ("run_ai_step", tool_run_ai_step, "Try an AI step of the plan for real and record it, with its answer held to the declared outputs by the same check a run uses. name takes the step's name or its id. The prompt of an accepted try becomes the step's prompt when the plan has none. prompt says what to judge; outputs gives the typed outputs, including the item_fields of record and list outputs, before the call. inputs takes file references, sample names and '$recorded' outputs of earlier tries. Use a model the user named; otherwise leave model blank for the configured default. A try whose prompt, inputs and model have not changed returns its recorded answer; pass fresh=true only when the user asked for a fresh answer. Values in a try's inputs are not saved as settings. Returns the accepted output, or the failure or the setup that is missing; an answer of the right shape is not necessarily a right answer.",
      {"name": str, "prompt": str, "model": str, "inputs": dict,
       "outputs": list, "fresh": bool}),
 
-    ("declare_variables", tool_declare_variables, "Declare the workflow's configurable values - and STORE a value the user has GIVEN: the moment a concrete value lands (a link, an address, a cap), pass it as that entry's `value` so no later turn re-asks for it. entries=[{name, value?, secret?, persistent?}]. A value fills an EMPTY entry only (the user's own edits are never overwritten - a different value comes back as a note; re-send with overwrite:true after they confirm). A SECRET the user PASTED into chat (a key, a token, a password - or just a value they'd rather not show people they share the workflow with): pass it as {name, value, secret:true} AT ONCE - it goes into the secret store by code, is removed from the chat record, and you get the NAME back; never refuse it, never make them paste it again, say nothing about how it should have been sent. ASKING for a secret still goes through the masked ask only. A value is stored in the type of the input that reads it, so a value that cannot mean that type (text where a number is read) is refused with the type named. A name an ATTACHED ENVIRONMENT supplies is never declared here - steps read it by name; a secret is never copied out of an environment, and a workflow-specific plain value needs the user's explicit wish (overwrite:true).",
+    ("declare_variables", tool_declare_variables, "Save settings the user agreed: entries=[{name,value?,secret?,persistent?,overwrite?}]. Include the real value the user gave, not only its name: a value passed in a try's inputs is not saved. A setting that already holds a different value keeps it, unless you pass overwrite:true after the user confirmed the change. The value is stored in the type of the input that reads it, and a value that cannot have that type is refused. Ask for a secret with ask_user and secret=true; if the user pastes one in the chat, save it with secret:true and never repeat it. A value from an attached environment is read by its name, never copied into the workflow; a plain value for this workflow only, in place of the environment's, needs the user to ask for it and overwrite:true.",
      {"entries": list}),
-    ("remove_variables", tool_remove_variables, "Remove workflow variables (settings). On your own: only BLANK ones nothing needs any more (a renamed input, a value the code now works out). One that HOLDS a value is removed only when the user asked for it by name - pass confirmed=true then. Refuses a name that is a step's only source. names=[...].",
+    ("remove_variables", tool_remove_variables, "Remove workflow settings. Without being asked, remove only blank settings that nothing reads any more (an input you renamed, a value the code now works out). Remove a setting that holds a value only when the user asked for it by name, and then pass confirmed=true. A setting that is the only source of a step's input is refused. names=[...].",
      {"names": list, "confirmed": bool}),
-    ("bind_variable", tool_bind_variable, "Record which attached environment supplies a variable, AFTER asking the user - use when two attached environments define the same variable name (a save reports it as a gap). environment = its name or id. Never guess: ask_user first, options = the environment names.", {"name": str, "environment": str}),
-    ("save_intent", tool_save_intent, "Write/update the workflow's INTENT document (see the 07-what-a-plan-contains skill): {summary, facts, instructions}. Update it INCREMENTALLY the moment the user states anything purpose-relevant - never re-derive it from full chat history. Required before save_plan; the deterministic build validates the built workflow against it. `instructions` = the USER-FACING how-to-run text (markdown, shown on the Information tab): how to start it, what they will be asked for, and WHERE TO FIND each value (you learned this exploring - e.g. 'your LinkedIn username is the last part of the URL on your profile page'). Write/refresh it by build time and whenever the asked-for values change; omitting it keeps the existing text. `facts` MERGE with the recorded ones (pass only new or corrected facts - earlier facts stay); to drop an outdated fact, name it in `remove_facts`. On the FIRST save also pass `description`: ONE plain line naming what this workflow does, for the workflow's card - used only while the workflow has no description; the user owns it after.",
+    ("bind_variable", tool_bind_variable, "Record which attached environment supplies a setting, when two attached environments hold the same name (a save reports this as a design gap). environment is the environment's name or id. Never guess: ask_user first, with the environments' names as the options.", {"name": str, "environment": str}),
+    ("save_intent", tool_save_intent, "Save the purpose, facts and run instructions before save_plan, adding to what is already saved. summary is what the task is for; facts adds new or corrected facts, and remove_facts removes facts that are out of date. instructions says how to start a run, what the user is asked for during a run and where the results appear; leaving it out keeps the saved instructions. On the first save, description is the short label on the workflow's card on the home page; after that the user owns it. Do not repeat the chat, and never overwrite a lasting decision with a detail from an old sample.",
      {"summary": str, "facts": list, "remove_facts": list,
       "instructions": str, "description": str}),
-    ("save_plan", tool_save_plan, "Persist the plan you will build (see the 07-what-a-plan-contains skill): {summary, nodes: [{name,type,description,inputs,outputs,code|code_sketch|prompt+model,external_impact,criteria,tests}], edges: [{src,dst,when?}], changes?, fix_note?, change_note?}. A line means order only (src finishes, then dst may start); a `when` over src's outputs makes it a route taken only sometimes; independent steps each get their own line into the step that needs them, never a chain through each other. IN A FIX TURN fix_note is REQUIRED: {went_wrong, will_change} - two plain sentences for the user (what happened; what you will change and why that fixes it) - no code, tool or field names; the user reads them at the top of the card. ANY OTHER CHANGE TO A BUILT WORKFLOW needs change_note: {found, will_change} - what you found about what the user asked or noticed, and what you will change and why, in the same plain words. DECLARE BEFORE YOU WORK: on a built workflow the first save of a change or a fix carries the note and changes {modified: [step names], added: [...], removed: [...]} naming the steps you will touch, and no code yet - the card shows that declaration, the click approves that scope, and then you work the declared steps and save each as it is proven; a step outside the declaration needs a save adding it, and the card asks once more. NEVER WRITE OUT WHAT A CELL ALREADY PROVED: for a step you ran with run_cell / run_ai_step, OMIT `code` and OMIT `tests` - the recorded run IS the step's code and its first test, attached here automatically. Typing them back costs thousands of tokens and a minute of the user's time per save. Send `code` only for a step no cell ever ran (or code you are deliberately CHANGING); `code_sketch` is the fallback for steps never exercised. Send `tests` only for an EXTRA case the recording does not cover. A step whose code you revised MECHANICALLY (a renamed input, launch flags, a tidied line) may carry minor_revision: \"<one sentence why no re-test is needed>\" - it builds without a live re-test and the built card tells the user so; never for a behaviour change, and NEVER on the step the open issue names (broken-to-working is not minor - that step is re-tested, or the user declines its card). A user-input step carries per_run_reason (why the value must be entered fresh EVERY run) - a stable value is a variable (declare_variables), never a step. SMALL CHANGE, SMALL SAVE: once a plan is saved, send ONLY the steps you changed or added (id-carried) - every other step, the edges and the summary carry forward from the saved plan automatically; a step leaves only through changes.removed; replace:true is the one way to start the plan over. Requires a saved intent (save_intent). Then build with build_workflow.",
+    ("save_plan", tool_save_plan, "Save the workflow's plan, or a change to it. Call save_intent first. The first save holds the outline: every step, and the lines between the steps that depend on each other; a workflow of one step needs no line. Later saves hold only the steps you changed or added (send a step's id to keep it the same step); steps, lines and the summary you leave out stay as they are. A list of lines (edges) that is not empty replaces all the lines. Name removed steps in changes.removed; replace:true replaces the whole plan on purpose. A line is {src,dst,when?}; steps can be given by name or id, and when reads the outputs of the step the line comes from. Before you work on a built workflow, save only the declaration of the change or fix: changes={modified:[names],added:[names],removed:[names]} with change_note={found,will_change}, or fix_note={went_wrong,will_change} for the open issue. The card this raises asks the user to approve what will change; after their click, work on those steps and save them. A browser or connector step that reads a list names max_setting, its number input that holds the most records it collects, which the user is asked for once. Before the first build, a save that adds or removes steps, or changes a step's kind, after the user approved the plan also needs change_note: it heads the card that asks them again. On any other save change_note is optional and is shown in the chat. A step's recorded try or AI try gives it its code and first test: leave code and tests out unless you change the code on purpose or add a different test case. A code_sketch is not a try. minor_revision is a true one-sentence reason why a change was only mechanical and needs no new real try; never use it for a change in what a step does, or for the step the open issue is about. A user-input step needs per_run_reason; a value that stays the same between runs goes in declare_variables. Returns the saved plan, its design gaps and where approval and the build stand. Fix the gaps it reports before you build.",
      {"plan": steps.PLAN_INPUT_SCHEMA}),
-    ("build_workflow", tool_build_workflow, "Build the workflow from the saved plan - YOUR build step. Call it when the user asks you to build/make/apply it. No plan yet? save_plan first, then this, same turn. REFUSES while any step hasn't been tested for real - run those as cells NOW (no asking) and call it again; only the user can build untested, from the opening card. It also refuses while the plan has open design gaps or a port with no type (save_plan reports both; fix them there), and until the user has agreed on the card save_plan shows them: the opening card, a fix's diagnosis card or a change card. It runs and streams right after this turn; then tell the user you are building it.",
+    ("build_workflow", tool_build_workflow, "Build the workflow from the saved plan the user agreed and from the recorded tries; it does not run the workflow. It needs every input and output typed, every design gap and finding fixed, the real values saved as settings, and the user's click on the opening, change or fix card. Every step needs an accepted try, or a recorded reason it was left untried or the user said no, with complete code and tests. A refused build says what to fix; never repeat a send only because the build was refused. An accepted build ends your tool use and shows its progress; its finished card is what the user sees as the result. Never say the build worked only because you asked for it.",
      {"include_proposals": list}),
-    ("resolve_issue", tool_resolve_issue, "Fix a problem from a failed run - YOUR repair step. Call it when the user asks you to fix/resolve an issue; pass the open issue's id (or omit for the latest). One fix at a time: while a fix is in progress in this conversation, save its plan and build it before starting another. Runs and streams right after this turn.", {"ticket_id": str}),
-    ("close_issue", tool_close_issue, "Close an issue WITHOUT changing the workflow - the honest exit when the diagnosis is that the workflow is right: resolution 'bad-data' (the rejected row was malformed at its source; fixing that data is not this workflow's job) or 'fixed-elsewhere' (the cause was outside and is dealt with). `note` = one plain sentence the user reads on the issue row. Say which of the three exits you chose (bad data / change the workflow / fixed elsewhere) and why BEFORE calling it or saving a fix plan.",
+    ("resolve_issue", tool_resolve_issue, "Fix a problem from a failed run. Call it when the user asks you to fix an issue; pass the open issue's id, or leave it out for the latest. One fix at a time: while a fix is going on in this conversation, save its plan and build it before you start another. The fix starts right after this turn.", {"ticket_id": str}),
+    ("close_issue", tool_close_issue, "Close an issue without changing the workflow, when you found that the workflow is right: resolution 'bad-data' (the rejected row was wrong where it came from, and fixing that data is not this workflow's job) or 'fixed-elsewhere' (the cause was outside the workflow and has been dealt with). note is one plain sentence the user reads on the issue row. Before you call it, or save a fix, tell the user which of the three ways out you chose (bad data, change the workflow, fixed elsewhere) and why.",
      {"ticket_id": str, "resolution": str, "note": str}),
-    ("ask_user", tool_ask_user, "Ask the user ONE question and WAIT for the answer (one question per call - call again for the next; never announce questions in text without asking them here). DOMAIN questions and decisions only (feedback on an output, save-or-iterate, a business rule). " + ASK_NEEDS_AN_ANSWER + " Offer options as plain STRINGS for one-click answers. For a CREDENTIAL VALUE pass secret=true + secret_name (e.g. 'wifi_password'): the input is masked and the value goes straight to the secure store - you receive the NAME only and use it by name. NEVER ask for a secret value in plain chat. Need a FILE from the user? pass upload=true - the card gets an upload button, the file lands as a sample, and the answer carries its name (read it with read_sample). NEVER point the user at a tab to upload. Need a LOCAL FOLDER/PATH? pass folder=true - the card shows a folder picker so nobody types paths by hand. THE SETUP CARD: to collect SEVERAL values at once (links, destinations, caps, route choices) pass fields=[{name, label, type: 'text'|'choice'|'number'|'date'|'boolean', options?, optional?}] (max 8) - ONE card the user answers once; use it right after announcing a new build to gather everything foreseeable before step work. Fields never mix with secret/upload/folder (those keep their own cards). The answer names any field left unprovided - treat that as a fork to resolve, never re-ask the same field. A field whose value is already stored is refused with that value - use it, or state why it is not enough and re-send with allow_stored=true. A value an environment on this computer holds but the workflow has not attached is not asked for either: tell the user to attach that environment.",
+    ("ask_user", tool_ask_user, "Ask the user one question about the task that you cannot answer yourself, or collect several setup values on one card. " + ASK_NEEDS_AN_ANSWER + " Options are plain strings, with the one you recommend first; a typed answer that says something counts, but it is never the click that approves the plan. secret=true with secret_name saves a credential straight into the secret store and returns only its name. upload=true asks for a sample file; folder=true opens a folder picker on the user's computer. For up to 8 values that are not secret, use fields=[{name,label,type:'text'|'choice'|'number'|'date'|'boolean',options?,optional?}]; fields cannot be on the same card as secret, upload or folder. Ask only for what is missing, not for every option a guide lists. A value already stored is returned instead of being asked again; allow_stored=true needs a stated reason. Use values from attached environments, or ask the user to attach an environment when that fits. The tool waits for the answer; if it returns a waiting status, the card is left waiting for the user: end the turn without a word and do not ask again. An answer to a setup question still goes where it belongs, a saved setting or a value for each run; a value used for a try never replaces a saved setting.",
      {"question": str, "options": list, "secret": bool, "secret_name": str,
       "upload": bool, "folder": bool, "fields": list, "allow_stored": bool}),
 ]

@@ -307,7 +307,7 @@ function blueprintCardHtml(item, answer) {
                       || removed.length);
   const built = p.head === "built";
   const head = built
-    ? (isChange ? "Here's what changed" : "Here's what I built")
+    ? "Done - built and checked"
     : isChange ? "Here's what will change" : "Here's the plan";
 
   const mustHave = (p.must_have || []).map((m) => `<div class="plan-installs">
@@ -346,6 +346,7 @@ function blueprintCardHtml(item, answer) {
   const planDiff = !built && p.plan_changed;
   const body = planDiff ? `
      <div class="chat-card-head">Here's what changed in the plan</div>
+     ${fixNote}
      ${diffList("Steps I removed from the plan", p.plan_removed)}
      ${diffList("Steps I will add to the plan", p.plan_added)}` : `
      <div class="chat-card-head">${head}</div>

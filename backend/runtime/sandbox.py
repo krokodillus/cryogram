@@ -96,6 +96,9 @@ def _stop_tree(proc, grace: float) -> None:
 # A progress note longer than this is shortened, with a marker showing it was shortened
 HEARTBEAT_NOTE_CAP = 160
 
+# A pause between two silence checks longer than this is the computer asleep, and is not counted as silence
+SLEEP_GAP_SECONDS = 30
+
 # Runs one step's code in isolation and returns its output; raises when the step fails or is stopped
 def run(code: str, entry: Optional[str], inputs: dict, secret_values: dict,
         python_exe: Optional[str] = None,
@@ -226,7 +229,14 @@ def _run_subprocess(code: str, entry: Optional[str], inputs: dict, secret_values
             started = _time.time()
             last_note = ""
             silence = 0
+
+            sleeps: list = []
+            prev_tick = started
             while proc.poll() is None:
+                now = _time.time()
+                if now - prev_tick > SLEEP_GAP_SECONDS:
+                    sleeps.append((prev_tick, now - prev_tick))
+                prev_tick = now
                 if should_stop and should_stop():
                     _stop_tree(proc, 2)
                     raise NodeStopped("stopped by the user mid-step")
@@ -269,9 +279,11 @@ def _run_subprocess(code: str, entry: Optional[str], inputs: dict, secret_values
                         pass
 
                     started = _time.time()
+                    prev_tick = started
                     os.utime(hb_path, None)
                     continue
-                if _time.time() - last_beat > timeout:
+                asleep = sum(gap for began, gap in sleeps if began >= last_beat)
+                if _time.time() - last_beat - asleep > timeout:
                     _report_then_kill(proc)
                     silence = timeout
                     break
@@ -294,6 +306,7 @@ def _run_subprocess(code: str, entry: Optional[str], inputs: dict, secret_values
     res = json.loads(line[len(SENTINEL):]) if line else None
     if report is not None:
         report["sent"] = sent
+        report["outputs_named"] = bool(res and res.get("outputs_named"))
         if isinstance(res, dict) and isinstance(res.get("calls"), dict):
             report["calls"] = res["calls"]
     if silence:

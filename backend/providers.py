@@ -22,20 +22,26 @@ from storage import settings
 
 adapters.DEFAULT_MAX_TOKENS = config.AI_MAX_TOKENS
 
-# A model that refused a temperature is marked on its rows in the provider settings, so no later call sends one
-def _remember_no_temperature(model: str) -> None:
+# A setting a model refused is stored on its rows in the provider settings, so no later call sends it
+def _remember_refusal(model: str, setting: str) -> None:
     s = settings.get()
     rows = [dict(p) for p in s.get("providers") or []]
     changed = False
     for p in rows:
         for m in p.get("models") or []:
-            if m.get("name") == model and not m.get("no_temperature"):
-                m["no_temperature"] = True
+            if m.get("name") == model and setting not in (m.get("refuses") or []):
+                m["refuses"] = list(m.get("refuses") or []) + [setting]
                 changed = True
     if changed:
         settings.update({"providers": rows})
 
-adapters.remember_no_temperature = _remember_no_temperature
+adapters.remember_refusal = _remember_refusal
+
+# The settings a step's model takes none of: the catalogue's known ones and what its rows learned
+def model_refuses(model_ref: dict) -> list:
+    p, _m = find_model(model_ref.get("model", ""), for_node=True,
+                       provider_id=model_ref.get("provider_id", ""))
+    return model_catalog.refuses(p or {}, model_ref.get("model", ""))
 adapters.DEFAULT_CALL_TIMEOUT = config.AI_CALL_TIMEOUT
 
 _PINNED = threading.local()
@@ -209,7 +215,7 @@ def node_models() -> list[dict]:
                             "quality": m.get("quality"),
                             "provider_id": p.get("id") or "",
                             "provider": p.get("name") or p.get("id") or "",
-                            "no_temperature": bool(m.get("no_temperature")),
+                            "no_temperature": "temperature" in model_catalog.refuses(p, m["name"]),
                             "default": p.get("id") == default,
                             "ready": is_ready({"model": m["name"], "provider_id": p.get("id") or ""})})
 
@@ -253,7 +259,7 @@ def resolve(model_ref: dict) -> dict:
             "key_name": p.get("key_name", ""),
             "auth": auth_type(p),
 
-            "temperature": None if m.get("no_temperature")
+            "temperature": None if "temperature" in model_catalog.refuses(p, model_ref.get("model", ""))
             else clamp_temperature(model_ref.get("temperature"))}
 
 def key_for(profile: dict) -> str | None:

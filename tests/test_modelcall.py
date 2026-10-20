@@ -100,8 +100,8 @@ class PartsTest(unittest.TestCase):
 
 class RequestShapeTest(unittest.TestCase):
     def test_anthropic_call_with_a_pdf(self):
-        seen, fake = _capture({"stop_reason": "tool_use", "usage": {"input_tokens": 3, "output_tokens": 2},
-                               "content": [{"type": "tool_use", "input": {"total": 5}}]})
+        seen, fake = _capture({"stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 2},
+                               "content": [{"type": "text", "text": '{"total": 5}'}]})
         with mock.patch.object(urllib.request, "urlopen", fake):
             res = adapters.call("anthropic", "claude-x", "k", "read it", [PDF],
                                 schema={"type": "object", "properties": {"total": {"type": "number"}}})
@@ -109,13 +109,47 @@ class RequestShapeTest(unittest.TestCase):
         self.assertEqual(res["usage"], {"in": 3, "out": 2})
         content = seen["body"]["messages"][0]["content"]
         self.assertEqual([c["type"] for c in content], ["document", "text"])
-        self.assertEqual(seen["body"]["tool_choice"], {"type": "tool", "name": "emit_output"})
+        self.assertNotIn("tool_choice", seen["body"])
+        fmt = seen["body"]["output_config"]["format"]
+        self.assertEqual(fmt["type"], "json_schema")
+        self.assertEqual(fmt["schema"]["properties"]["total"]["type"], ["number", "null"])
+        self.assertIs(fmt["schema"]["additionalProperties"], False)
+
+    def test_the_anthropic_schema_is_the_form_its_json_output_takes(self):
+        schema = {"type": "object", "required": ["total", "note", "rows"],
+                  "properties": {
+                      "total": {"type": "number", "minimum": 0, "x-file": True},
+                      "note": {"type": "string", "minLength": 1, "format": "ISO"},
+                      "when": {"type": "string", "format": "date"},
+                      "kind": {"type": "string", "enum": ["a", "b"]},
+                      "rows": {"type": "array", "minItems": 2, "items": {
+                          "type": "object", "properties": {"id": {"type": "string", "maxLength": 9}}}}}}
+        got = adapters.anthropic_answer_schema(schema)
+        self.assertEqual(got["properties"]["total"], {"type": ["number", "null"]})
+        self.assertEqual(got["properties"]["note"], {"type": ["string", "null"]})
+        self.assertEqual(got["properties"]["when"]["format"], "date")
+        self.assertEqual(got["properties"]["kind"]["enum"], ["a", "b", None])
+        rows = got["properties"]["rows"]
+        self.assertNotIn("minItems", rows)
+        self.assertEqual(rows["items"]["properties"]["id"], {"type": "string"})
+        self.assertIs(rows["items"]["additionalProperties"], False)
+        self.assertEqual(got["required"], ["total", "note", "rows"])
+
+        wide = {"type": "object", "properties": {f"f{i}": {"type": "number"} for i in range(17)}}
+        self.assertEqual(adapters.anthropic_answer_schema(wide)["properties"]["f0"], {"type": "number"})
+
+    def test_an_anthropic_refusal_is_an_error_not_an_answer(self):
+        seen, fake = _capture({"stop_reason": "refusal", "content": [{"type": "text", "text": "I can't help with that"}]})
+        with mock.patch.object(urllib.request, "urlopen", fake):
+            res = adapters.anthropic_structured("claude-x", [], "k", {"type": "object"})
+        self.assertNotIn("structured", res)
+        self.assertIn("declined", res["text"])
 
     def test_a_model_that_refuses_temperature_is_asked_again_without_it(self):
         import io as _io
         bodies = []
-        reply = {"stop_reason": "tool_use", "usage": {"input_tokens": 1, "output_tokens": 1},
-                 "content": [{"type": "tool_use", "input": {"total": 7}}]}
+        reply = {"stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1},
+                 "content": [{"type": "text", "text": '{"total": 7}'}]}
 
         def fake(req, timeout=None, context=None):
             body = json.loads(req.data.decode())
@@ -124,10 +158,10 @@ class RequestShapeTest(unittest.TestCase):
                 raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
                                              _io.BytesIO(b'{"error":{"message":"`temperature` is deprecated for this model."}}'))
             return _Resp(reply)
-        adapters._NO_TEMPERATURE.discard("claude-new-5")
+        adapters._REFUSED.pop("claude-new-5", None)
         told = []
         with mock.patch.object(urllib.request, "urlopen", fake), \
-                mock.patch.object(adapters, "remember_no_temperature", told.append):
+                mock.patch.object(adapters, "remember_refusal", lambda m, s: told.append((m, s))):
             res = adapters.call("anthropic", "claude-new-5", "k", "read it", [], temperature=0,
                                 schema={"type": "object", "properties": {"total": {"type": "number"}}})
             self.assertEqual(res["structured"], {"total": 7})
@@ -139,8 +173,45 @@ class RequestShapeTest(unittest.TestCase):
             self.assertEqual(len(bodies), 3)
             self.assertNotIn("temperature", bodies[2])
             self.assertEqual(res2["structured"], {"total": 7})
-        self.assertEqual(told, ["claude-new-5"])
-        adapters._NO_TEMPERATURE.discard("claude-new-5")
+        self.assertEqual(told, [("claude-new-5", "temperature")])
+        adapters._REFUSED.pop("claude-new-5", None)
+
+    def test_gemini_drops_a_refused_temperature_from_its_generation_settings(self):
+        import io as _io
+        bodies = []
+        reply = {"candidates": [{"content": {"parts": [{"text": '{"total": 3}'}]}, "finishReason": "STOP"}]}
+
+        def fake(req, timeout=None, context=None):
+            body = json.loads(req.data.decode())
+            bodies.append(body)
+            if "temperature" in body.get("generationConfig", {}):
+                raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
+                                             _io.BytesIO(b'{"error":{"message":"temperature is not supported for this model","status":"INVALID_ARGUMENT"}}'))
+            return _Resp(reply)
+        adapters._REFUSED.pop("gemini-new", None)
+        told = []
+        with mock.patch.object(urllib.request, "urlopen", fake), \
+                mock.patch.object(adapters, "remember_refusal", lambda m, s: told.append((m, s))):
+            res = adapters.call("gemini", "gemini-new", "k", "read it", [], temperature=0,
+                                schema={"type": "object", "properties": {"total": {"type": "number"}}})
+        self.assertEqual(res["structured"], {"total": 3})
+        self.assertEqual([("temperature" in b["generationConfig"]) for b in bodies], [True, False])
+        self.assertEqual(told, [("gemini-new", "temperature")])
+        adapters._REFUSED.pop("gemini-new", None)
+
+    def test_a_refusal_naming_no_optional_setting_is_not_retried(self):
+        import io as _io
+        calls = []
+
+        def fake(req, timeout=None, context=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
+                                         _io.BytesIO(b'{"error":{"message":"the schema is too complex"}}'))
+        with mock.patch.object(urllib.request, "urlopen", fake):
+            res = adapters.call("gemini", "gemini-x", "k", "read it", [], temperature=0,
+                                schema={"type": "object"})
+        self.assertEqual(len(calls), 1)
+        self.assertIn("too complex", res.get("text", ""))
 
     def test_openai_call_with_a_pdf_and_an_image(self):
         seen, fake = _capture({"choices": [{"finish_reason": "stop",

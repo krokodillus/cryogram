@@ -1,112 +1,65 @@
 ---
 name: 07-what-a-plan-contains
-description: The plan the build reads - the workflow's summary and purpose, what each step declares, the order steps run in, how the work splits into steps, the checks, what may be empty, where each value lives, documents, and the design gaps to resolve before building
+description: What a plan holds: where one step ends and the next begins, typed inputs and outputs, the lines between steps, checks, and where each value is stored
 tier: 2
 kind: policy
 depends_on: []
-version: 4.4.0
-last_updated: 2026-09-15
+version: 5.2.1
+last_updated: 2026-10-14
 ---
 
 # What a plan contains
 
-The plan is what you build from, and it stays on the workflow. Make it complete enough that building needs nothing else: a design that hangs together before the code is written is what makes the build work first time, so give every port a real type, have every input come from an earlier step or a stored value or the user, and line the names up.
+The plan describes a workflow that will run again and again on new data, not only the sample that worked. Write its summary, purpose, facts and run instructions in English, keep them short, and update them when what the workflow does changes.
 
-## The workflow
+## Steps and their inputs and outputs
 
-The summary is two to four plain sentences of what the workflow, or the change, does. It is written in English for a non-technical owner and appears on the card the user reads; the precision lives in the steps.
+Give each step a name a person can read, one kind, a short description of how it works, typed inputs/outputs with names a person can read, and the fields its kind needs. Keep a step's id when you rename it: a new name sent without an id is read as a new step.
 
-The workflow also carries its purpose: two to four sentences, the facts the user has stated that bear on it, and the instructions for running it.
+- A code, connector or browser step carries the code from its accepted try, or, for a step deliberately left untried, complete code you wrote.
+- A connector step declares the exact host names it reaches (only the host, for example `api.example.com`, including any address it is known to redirect to) and `read_only`. A browser step declares its `url` and `read_only`, not `domains`. A connector or browser step that changes something outside also declares `external_impact`, one plain sentence the user reads before they approve it; a step that only reads needs none. Only a browser step gets a `page`.
+- Declare the Python packages a step needs and the folders it may read, as the user approved them. Never add a library, a host or a setting only because another workflow used it.
+- An AI step carries the prompt that tells the model what to judge, and what each output field means. A model or provider the user names is the one to use. Otherwise leave `model` blank, and the default model the user set up is used. Never swap in another model without telling the user. Set the temperature to suit the judgement (see skill 62). Change the output limit or the time limit only when a try showed it was needed.
 
-## Each step
+Input and output types, and how arguments are spelled, follow each tool's own description and the list of functions available to step code. Use one name for a value from the step that makes it to every step that reads it. A file is passed as its stored file reference, never as its contents or a path into the app's storage. The kinds of file a step takes come from the real sample; accept more kinds only when the user asks for it and a try shows it works.
 
-A step's name is a plain human phrase, shown exactly as written: ordinary words with spaces, capitalised like a sentence, never a run-together or hyphenated identifier.
+The shape of nested outputs of a code, connector or browser step is worked out from its tries. An AI step's record and list outputs need their `item_fields` before its first call, each with a type and a description that says what it means (see skill 62). When a value can only be one of a fixed set, list every option: one example does not show all the values that are allowed.
 
-A step's id is its identity and its name is only its label. Every saved step carries an id for its whole life, built or not. You keep writing names in the order, the changes and the cell names, and they are matched to ids for you. To rename, carry the id with the new name, or say in the changes that this name became that one, and the recording and the user's answers follow. A new name with no id is a new step.
+## The lines between steps
 
-Each step declares its name, its kind, what it does, how it works, and what it takes in and gives out, plus the fields its kind needs:
+A line between two steps means only "run this step after that one". It does not carry data: a step reads its inputs by name from the outputs of steps that ran before it on its own path, then from the values the run was started with, then from saved settings. So the step that makes a value must come before the step that reads it, on the same path of lines. Steps that do not depend on each other stay unconnected. A step can have several lines coming into it. Do not add lines nothing needs, do not put steps that do not depend on each other in a row, and never let two earlier steps produce a value under the same name that a later step reads.
 
-- A code step or a connector carries the code, or, where no cell ever ran it, a prose sketch of what the code will do.
-- An AI step carries its prompt and, only when the user asked for one, its model and provider. You never choose a model: leave `model` blank and it is picked for the step from the user's default provider, and when nothing can be picked the user is asked on a card without your doing anything. A model or provider the user names, in the chat or in the step's prompt, before the build, during it, or in a change or a fix, is the one the step uses: put their words in the step's `model` ("Sonnet 5", "haiku") and the set-up list is searched for it; a name that fits nothing comes back to you to put to the user. Set a temperature on every AI step: 0 for a judgement that should come out the same every run, higher only when the user wants variety; a model that takes no temperature ignores it, so it is never left off. Its answer room is left at the default unless the answer is genuinely long, or one came back cut off.
-- A connector says in plain words what it changes outside, which is the sentence the user approves. One that only reads says so, and then no approval appears in front of it.
-- A browser step is its own kind. It declares the `url` it opens, which is the address the person is asked about and where the app opens the window before the step's code runs; it names no `domains`, because Chrome reaches the web itself. Its cell always records the traffic and the whole page.
-- A step declares the Python libraries it needs, and, if it is a code step or a connector, the bare hostnames it reaches. Anything not named is blocked when the workflow runs.
-- A step that sends one message per item declares how it reaches the service and how fast it was agreed to go, so a later repair knows what to change.
+A line can have a condition (`when`), which reads the outputs of the step the line comes from. Say which runs take each path and which steps they skip, and do not add paths for cases nobody expects. The decision on a path is made by a code, connector or AI step. A part of the workflow that only has work when an earlier list has items, such as a deeper look at the people a filter kept, starts with a condition on the line into its first step (`len(review_candidates) > 0`), so a run where the list is empty skips that part instead of running it on nothing.
 
-"How it works" is one to three plain sentences shown in the step's panel: what it uses each input for and why it produces what it produces.
+Split the work into a new step only where something really changes: the user gives a value, something outside is changed, an AI judges something, or the run takes a different path. Keep the work that prepares data on this computer together. Each outside service gets its own connector step. A browser step may open many pages if they are the same kind of page. Collecting a list and opening each item in it are two steps: the first does whatever it takes to collect the whole list (scrolling, clicking "next", going to the next page) and saves each item's link as it goes, and the second opens each saved link, each with its own maximum setting. Never split a step into copies to handle more items, and never move the building of a small request into its own step only to have more steps.
 
-A port (one named input or output of a step) declares its name, a human label, its type, what goes in the field, and, for a list, the shape of one item. The type decides the control the user sees wherever the value is entered, so pick it for what the user has to do. Give every port a label, and reuse the label an existing key already has: one field, one name. The types are text, long text, number, boolean, date, choice, file, file path, folder, record, list and secret; a list declares the shape of one item beside it. While you are sketching the plan a port may carry its name alone, but every input and output has its type before the step is tried or built, because the try is judged exactly as a run is and a run checks every value against its type: the type is what the code expects, decided when you write the code, never read off whatever happened to arrive. A file port's `file_kinds` (pdf, image, spreadsheet, document, text) is the step's own check on what it takes: you never fill it in, the first try on a real sample does, and you widen the list only when the user asks the step to take another kind as well.
+A step that only transforms data on this computer works on all of its input. A browser or connector step that reads a list from outside declares `max_setting`: the name of its number input that holds the most records it collects. Set that input to the number the request states, or, when it states none, to the number the user gave when you asked them once. Declare it, and write the step's code to read it, in the first save that has the step, so the step never has to be rewritten later to add it. The step collects until it reaches that maximum, the end of the list, or a cutoff the user gave, whichever comes first. A plan without it has a design gap. A step that does something to each item and must be able to carry on after a stop declares `per_item: {input, key}`, where `key` is the field that tells two real items apart. Two items with the same content are not therefore the same item.
 
-## The order steps run in
+Use an AI step when each run needs real interpretation, and code when the rule can be written down exactly. Never replace a judgement the user asked for with a rule of thumb, and never redesign an AI step the user accepted without their agreement.
 
-A line between two steps means order and only order: when this one finishes, that one may start. Draw the order the work actually happens in, and leave independent steps unconnected.
+## Checks, empty values and partial results
 
-Two steps that need nothing from each other, such as a step that asks the user for a name and a step that fetches a page, are two branches: neither is drawn into the other, and each is drawn into the first step that needs both. A step may have several lines into it; it starts after every step on a line into it has finished, and reads all of their values by name. The save reports a line between two steps that share nothing, and the fix is to take it out and draw each of the two into the step that needs both.
+A check states a business rule the task really has, never a value copied from one sample. In a check, use only the step's input and output names, and only the functions the app allows. A failing check stops the run at the step that produced the value. Keep the tests you write specific, and make them cover cases the recorded try does not.
 
-A line never carries data. A finished step drops what it produced into a pool for the run, and a later step reads what it needs by name from the steps that ran before it on its own path, then from the stored values. So never draw a line because a later step needs an earlier value. Two earlier steps must not produce one name a later step reads, because nothing can say which was meant: rename one of them.
+Mark an output, or a field inside it, optional only when the value can really be missing. Every step that reads it must work without it. Required means the workflow cannot do its job without the value; never make an AI step invent a value the source does not have. An empty list can be a complete and correct result, but it never shows that a blocked page was read. Decide on purpose whether an output can be empty: otherwise a try that returned items marks it as one that must not be empty.
 
-A line can carry a condition over the outputs of the step it comes from, such as one document type going one way. A step that runs only sometimes has the condition on the line into it, and a step that has to run whether or not that step ran gets its own line from the step before it, with the other condition. Every path is equal, so a path that skips most of the work is still a path and gets its own condition. Branch only on a condition you know is likely, never a speculative one, and the value that decides comes from a code, connector or AI step, never from a step that asks the user.
+Decide from the task whether the run may carry on with only part of the items. An export or a reconciliation that must be complete stops when items are missing. A report where the user accepted partial results says which items are missing and why. A failed item must never be marked as sent. Use the step's `on_invalid_items` setting (`stop`, `proceed` or `log`) to make this explicit.
 
-## How the work splits into steps
+## Where values are stored
 
-A step exists only at a boundary: the user putting something in, an effect out in the world, a judgement that needs a model, or a branch. Everything between two boundaries is one step, however much it computes.
+- A choice that is different on every run belongs on a user-input step, and is not saved. Load "07-what-a-plan-contains/choices" when you offer the user options to choose from.
+- A value the user controls and that stays the same between runs (a destination, a sheet tab, a threshold, a folder, a real limit) is a saved setting with a type, stored as soon as the user agrees it. Passing it in a try's inputs does not save it. Use only the types the setting tool supports: a choice or a record cannot be a saved setting.
+- A value a step works out belongs on that step's output, connected to the steps that read it, and never in a setting the user has to fill in.
+- API paths, selectors and fixed values of a site's structure belong in the code. Values the user gave belong in settings, not written into the code.
+- A value from an environment attached to this workflow is read by its name, never copied into the workflow. When two environments hold the same name, ask the user which one to use and record their choice.
+- A secret is read by its name from the secret store, never stored as an ordinary text value.
 
-Never two steps that do the same thing. Handling many items is one step looping in its own code, never a step per item, per batch or per chunk. Many workflows loop over items, and every such loop reads its maximum from a setting (a number such as `max_conversations`, set to what the user asked for, or asked about with the other setup values when they did not say); the number is never written into the code. Volume never justifies more steps: a step tested on the sample stands, and it is never split into copies of itself because the real job looks large, because copies bake in a count no setting can change. If a real run later shows the step could not cope, that is evidence and a repair; until then there is nothing to fix.
+## Files and reference data
 
-Each distinct outside source is its own step. Two sites, APIs or feeds are two steps running in parallel before the step that combines them, and a second source is always a new step rather than a widened one.
+Decide where a file comes from by what it is for, in the first plan you save. If each run works on a different file (an invoice the user uploads, a new export), the plan starts with a user-input step that asks for the file on each run, and that step's `per_run_reason` field says why in one sentence. If it is the same file on most runs (a template, a document of criteria), it is a setting whose value is the uploaded sample's stored file reference. The sample the user gave you while building is only for trying the steps in the first case.
 
-An AI step exists only where a per-run judgement is genuine. A step you did the same way every time while working it out is a code step. You never propose turning an AI step into fixed code, and never suggest it after looking at earlier runs either: that is a redesign the user asks for.
+A stored file is a copy kept with the workflow. A file path is read fresh from the user's folder on every run, through the folder the user allowed. Use the input or setting type that matches, and call `read_input(name, path=True)` when a library needs a path on disk.
 
-Every step the user watched you do maps to a step in the plan, and nothing extra or implied.
+Use a real sample the user uploaded, text they pasted and you saved as a file, or a template they asked you to make. Never make up a lookup table, and never say a file you made is the user's data. Use a file for structured or binary material or for reference data that changes; use text for a short plain value. Not every document you can read is a text setting.
 
-## Checks
-
-Checks are the one or two always-on tests the recorded evidence makes you structurally certain of: relations that are arithmetic fact, such as the number of rows written matching the number kept. Never a literal out of the sample, and never a guess about future data. If you are not certain, do not write it.
-
-Every check is hard, so a failure stops the run at that step. A rule the user stated always becomes one, and so does a fact the workflow's own identity fixes, such as the link having to be a search page of a particular kind, written on the step where the value comes in. Checks sit on the step that produces the value, so a wrong value stops under that step's own name before anything else runs on it.
-
-A check is written as Python over that step's own inputs and outputs as bare names, and a field inside a record output is looked up by key. A name the step neither takes in nor produces cannot be worked out and fails the run.
-
-Tests are cases built from the outputs the user accepted, with real values in them and never placeholders.
-
-## What can be empty
-
-For every output and every field inside one, decide whether the value is there on every run. One that legitimately is not on some runs is declared optional, and then it may be missing without anything stopping: the checks tolerate it, the enforced answer shape stops demanding it, and a step reading it gets nothing instead of the run stopping. Two things follow: every step that reads an optional value has to run without it, skipping the photo or leaving the column blank rather than failing; and a value the workflow truly needs every run is never marked optional to dodge a failure, it gets a real source, from the user or from another step. Where you cannot tell which of the two a field is, ask.
-
-The same call for a list. One whose recorded run had items in it is expected to have items, so a run that finds none stops there, which is how a wrong link shows up. Where finding none is normal, say so on the port. Emptiness is judged once, where the list is produced: a step reading an empty list treats it as ordinary data and runs on it. A step that works through a list declares which input it walks and what identifies each item.
-
-The full nested shape of a record output is worked out for you from the recorded run and held at the boundary on every later run, so you never write it out. It tolerates a missing field by default. Your one call is which fields the record would be meaningless without: a prospect with no job title is still a prospect, one with no name is not. Mark those as required, and a required text that comes back empty is a failure rather than a value. Where a field is a fixed set of choices, declare them, because those are never worked out for you.
-
-Then decide, for each step that produces a list, what a run does with items that do not fit the shape: stop there and show the rows, carry the good ones on and set the rest aside with reasons, or set them aside and record it without raising a problem. Recommend carrying on only where the items are independent and what follows is a read or a report, and never the quiet option on a step that feeds a write.
-
-## Where a value lives
-
-A workflow automates a task, so it asks the user only what it cannot work out for itself. Values the user sets steer it: an address, a cap, a choice. Anything it could fetch, compute or read out of something else is a step's output.
-
-So thread the data end to end: each handover uses one name on both sides, every output feeds a later step or a saved result, and every input names an earlier step's output exactly, or is a genuine steering value. If the user would have to paste it in, the seam is wrong. An input nothing produces sitting beside an earlier output nothing reads is a broken join, never a setting.
-
-Three homes, one question each, asked in order:
-
-- **A step that asks the user.** Is it likely to be different each run? Today's search phrase, a choice for this run. It never persists, and one that opens the workflow says why it has to be asked each time. No honest reason means it is a setting.
-- **A stored setting.** Is it mostly fixed, something the user would change now and then? The sheet it saves to, links, folders, addresses, a limit, a threshold. It is created as the value arrives, never left to appear after the first run.
-- **The code.** If this value changed, would the code have to change with it? An API path, a selector, a field name in someone else's system, a pattern. Those belong in the code, and the user cannot meaningfully change them. Never write a value the user gave you into the code as a literal: declare an input instead.
-
-A value a step works out, such as an id read out of a link or a column position read from a header, is that step's output travelling by name, and never a setting. A per-run value never persists as one either. The place the user sets values holds only what they set and keep between runs.
-
-A setting's type is a closed set: text, number, date, boolean, file, file path or folder. Never a choice and never a record. Only a step that asks the user can offer a choice; load "07-what-a-plan-contains/choices" when a step offers a list to pick from.
-
-A value from an attached environment (a set of shared values several workflows read) is read by name and never copied: never declare it again, never ask for it again, and never write it into code or a prompt. Where it lives in an environment that is not attached, tell the user to attach that environment.
-
-Secrets appear by name only, and the masking follows from the port's type.
-
-## Documents
-
-For things that cannot be typed: a spreadsheet, a PDF, an image. Anything whose content is text a person could read in a box is a text setting instead.
-
-A file setting keeps a copy with the workflow, so it travels with it and never changes underneath. A file path setting leaves the file where the user keeps it and reads it fresh at the start of every run, which suits a file they keep replacing in place, and ties the workflow to this computer.
-
-Either way the step declares a port of that type and reads it by name, asking for a real path when a library needs one. Reference data the user may want to change later, a list, a template, a lookup table, is a file they provide, never a list written into the code, and never a file you wrote yourself: a file you invented is not their data, and if they have no such file, say plainly that you cannot make it for them and ask what they can give you instead.
-
-## Before you build
-
-The save reports design gaps: a name two steps produce, an input nothing supplies, a value set in two environments, a step no cell ran. Resolve every one: rename something, reorder something, add a step, or ask one plain question.
+The checks before a build are in skill 06. A sample that worked shows that one run worked. It does not show that the setup is complete, that every future input will be handled, or that a send reached its destination.

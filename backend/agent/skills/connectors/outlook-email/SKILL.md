@@ -1,47 +1,47 @@
 ---
 name: outlook-email
-description: WHEN a workflow step needs to send email from an Outlook / Microsoft 365 address - the one question that decides the route (personal vs work account), the basic-auth retirement, the bridge-flow route, and the company-IT fallback
+description: WHEN a step sends mail from Outlook or Microsoft 365: which routes fit the account type, and how to confirm that the mail was delivered
 tier: 2
 kind: action
 depends_on: []
-version: 1.4.0
-last_updated: 2026-09-06
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # Sending from Outlook / Microsoft 365
 
-## Ask first
+## Settle these questions before setup
 
-This is a genuine fork with different routes: is this a personal Outlook or Hotmail address, or a work or school (Microsoft 365) account? The options are Personal / Work or school.
+Use the account type the user has already stated. Ask whether it is a personal or a work/school account only if you do not know and the answer changes which route is possible.
 
-The clock: Microsoft is retiring basic SMTP auth, and with it app passwords. New accounts and tenants often have it off already; existing ones lose it by default after December 2026, though admins can re-enable it until the final removal date (to be announced in the second half of 2027). SMTP may still work today, but the future-proof route is the bridge flow below. Prefer it unless SMTP proves available live and the user wants the quickest path now.
+Prefer an OAuth or mail connection that is already authorised and suits the task. Whether basic SMTP authentication is available, and when it is retired, varies and changes. Check the official documentation and the tenant's policy before you recommend it. The Power Automate bridge is one option. It is not a replacement that will always work.
 
-## The locked-in route for both account types: the Power Automate bridge flow
+## Power Automate bridge: needs a work/school account that owns the flow
 
-The free "When a Teams webhook request is received" trigger (a standard connector; the plain HTTP trigger is premium) drives the Outlook send action, and the auth is the flow's own sign-in, so no password ever enters the workflow.
+Managing Power Automate cloud flows needs a work/school account. Support for personal accounts ended in July 2025. Before you offer this bridge, check three things: there is a work or school account that can own the flow, the tenant gives access to Teams Workflows, and the Outlook connector the step needs is available. A personal Outlook mailbox alone is not enough. Licensing and tenant policy can block the route, so do not say it is free everywhere or never needs an admin. If the bridge is not available, check whether an OAuth connection that is already authorised can be used, or tell the user what IT must allow.
 
-1. https://make.powerautomate.com, Create, Instant cloud flow, the trigger "When a Teams webhook request is received" (Who can trigger: Anyone).
-2. Add the action "Send an email (V2)", with the connector "Office 365 Outlook" for work accounts and "Outlook.com" for personal. Map To, Subject and Body from the trigger body (triggerBody()?['to'] and so on).
-3. Save; copy the trigger URL and collect it through the masked ask. The URL is the credential.
+1. Go to https://make.powerautomate.com and choose Create, then Instant cloud flow, then the trigger "When a Teams webhook request is received" (Who can trigger: Anyone).
+2. Add the action "Send an email (V2)". Use the connector "Office 365 Outlook" for work accounts and "Outlook.com" for personal accounts. Map To, Subject and Body from the trigger body (triggerBody()?['to'] and so on).
+3. Save the flow, copy the URL of the trigger and ask the user for it with the masked ask. The URL is the only credential, so treat it as a secret.
 
-The send pattern: POST JSON {"to","subject","body"}; timeout=30; retry timeouts, 5xx and 429 only; success is a 202 with an empty body. It is fire-and-forget: confirm arrival once with the user during exploration, and when mails stop, check the flow's run history (make.powerautomate.com, My flows, the latest run), which names the failing action. Never resend blind.
+Send the to, subject and body the user agreed to in one POST, with a timeout and one attempt. A 202 means only that the trigger accepted the request, not that mail was delivered. During the approved test, confirm the "Send an email" action in the flow's run history, or at the recipient's end. If the outcome is unclear, find out what happened before you send again. Never send again just to find out whether the previous mail arrived.
 
-## SMTP, which works on some accounts today: verify live, warn about the clock
+## SMTP: works on some accounts today, so test it live and warn about the end date
 
-- Personal: an app password from https://account.live.com/proofs/manage/additional, with two-step verification on. No "App passwords" option means the account is already past basic auth, so use the bridge flow.
-- Work: "Authenticated SMTP" may be enabled for the mailbox; try it live with the masked-collected password. The error "SmtpClientAuthentication is disabled for the Tenant" is the policy signal, never a typo, so stop immediately.
-- The pattern for both: smtp-mail.outlook.com (smtp.office365.com for work), port 587 with STARTTLS, timeout=30, EmailMessage; retry once on a timeout or disconnect, never on an auth error. The domain is the SMTP host used.
-- If SMTP is chosen, note the retirement date in the workflow's instructions so the eventual failure is no mystery.
+- Personal Outlook has no general route that uses a password or an app password for mail. Use an OAuth client or connection that Microsoft supports. Do not send the user looking for an app-password setting as your first approach.
+- Work accounts: "Authenticated SMTP" may be enabled for the mailbox. Try it live with the password collected through the masked ask. The error "SmtpClientAuthentication is disabled for the Tenant" means the organisation's policy blocks it. It is not a typo, so stop at once.
+- Where SMTP is explicitly supported and the user has authorised it, use STARTTLS on the documented host, with timeout=30 and EmailMessage. Do not send again automatically after a timeout or a dropped connection, because the server may have accepted the mail. Find out first whether it was delivered.
+- If you choose SMTP, write the date Microsoft retires it in the workflow's instructions, so that the failure when it ends has a known cause.
 
-## If neither lands
+## If neither works
 
-The one-line IT ask: please enable "Authenticated SMTP" for my mailbox, or allow me an instant cloud flow with the Teams webhook trigger that sends mail as me. If IT declines both, offer the pragmatic alternative: send from Gmail (the gmail guide) with the work address as reply-to, and say plainly that sending as the work address then needs IT.
+Give the user this one line to send to IT: please enable "Authenticated SMTP" for my mailbox, or allow me an instant cloud flow with the Teams webhook trigger that sends mail as me. If IT declines both, offer the practical alternative: send from Gmail (the gmail guide) with the work address as the reply-to address, and tell the user plainly that sending as the work address then needs IT.
 
 ## What goes wrong
 
-- Auth failures on work accounts are policy, not typos: never retry, and never ask the user to re-type the password more than once.
-- The bridge flow dies silently if it is turned off or its owner leaves; run history first.
+- Read the actual authentication error. A wrong credential and a tenant policy need different fixes. Do not try passwords again and again, and do not change the authentication method, on the strength of a status code alone.
+- The bridge flow stops without any message if it is turned off or its owner leaves. Look at the flow's run history first.
 
 ## Official docs
 
-Check here if a route fails: https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online
+If a route fails, check here: https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online

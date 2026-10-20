@@ -242,33 +242,37 @@ def schema_from_ports(ports: list) -> dict:
         if not p.get("optional") and frag.get("type") == "string" \
                 and "enum" not in frag and not p.get("secret"):
             frag["minLength"] = 1
-        desc = str(p.get("description") or "").strip() or p.get("label")
-        if desc:
-            frag.setdefault("description", desc)
-
-        for f in p.get("item_fields") or []:
-            if isinstance(f, dict) and f.get("name") and (f.get("description") or f.get("label")):
-                sub = ((frag.get("items") or {}).get("properties") or {}).get(f["name"])
-                if isinstance(sub, dict):
-                    sub.setdefault("description",
-                                   str(f.get("description") or "").strip() or f.get("label"))
+        _describe_ai_fields(frag, p)
         props[p["name"]] = frag
     return {"type": "object", "properties": props,
             "required": [p["name"] for p in ports or []
                          if not p.get("optional")],
             "additionalProperties": False}
 
+# Carries declared field meanings through both record and list schemas, including nested records
+def _describe_ai_fields(fragment: dict, port: dict) -> None:
+    desc = str(port.get("description") or "").strip() or port.get("label")
+    if desc:
+        existing = fragment.get("description")
+        fragment["description"] = (f"{desc} {existing}" if existing and existing != desc else desc)
+    properties = fragment.get("properties") or (fragment.get("items") or {}).get("properties") or {}
+    for field in port.get("item_fields") or []:
+        if isinstance(field, dict) and isinstance(properties.get(field.get("name")), dict):
+            _describe_ai_fields(properties[field["name"]], field)
+
 # The model-facing view of a shape: private markers stripped, objects closed against invented fields
 def _ai_frag(sch: dict) -> dict:
     if not sch or "type" not in sch:
         return {}
     out: dict = {"type": sch["type"]}
+    if sch.get("description"):
+        out["description"] = sch["description"]
     if sch.get("x-nullable"):
         out["type"] = [sch["type"], "null"]
     if sch.get("enum") is not None:
         out["enum"] = list(sch["enum"])
     if sch.get("format") == "date":
-        out["description"] = "ISO date, YYYY-MM-DD"
+        out["description"] = " ".join(x for x in (out.get("description"), "ISO date, YYYY-MM-DD") if x)
     if sch["type"] == "object":
         req = list(sch.get("required") or [])
         exp = [k for k in (sch.get("x-expected") or []) if k not in req]
@@ -357,9 +361,18 @@ def filter_recording(name: str, value: Any, kind=None, url=None, status=None,
     raise InputContractError(f"input {name!r} is not a calls listing or a traffic "
                              "recording, so kind, url, status, method and ids do not apply to it - read it without filters")
 
+# The sentence for code that reads an earlier output by its reference instead of by an input's name
+def recorded_ref_sentence(ref: str) -> str:
+    return (f"read_input takes the name of one of the try's inputs, not {ref!r}: pass "
+            f"{ref!r} in the try's inputs under a name of your own, for example "
+            f"inputs={{\"page\": {ref!r}}}, and read that name with read_input(\"page\")")
+
 def _read_input(name: str, binary: bool, path: bool) -> Any:
+    if name not in _ctx["inputs"] and str(name).startswith(("$recorded", "$issue")):
+        raise KeyError(recorded_ref_sentence(str(name)))
     if name not in _ctx["inputs"]:
-        raise KeyError(f"input {name!r} not declared/available")
+        raise KeyError(f"input {name!r} is not one of this step's declared inputs, so "
+                       "it has no value here - add it to the step's inputs in the plan (a value the workflow keeps between runs is then a setting)")
     val = _ctx["inputs"][name]
     if isinstance(val, str) and val.startswith("blob:"):
         with diskguard.harness():
@@ -398,6 +411,9 @@ def _read_input(name: str, binary: bool, path: bool) -> Any:
         else:
             data = json.dumps(val).encode("utf-8")
         return _materialise(name, data)
+
+    if binary and isinstance(val, str):
+        return val.encode("utf-8")
     return val
 
 # An error message with the values the step read replaced by the input's name, so a quoted file never floods the message
@@ -469,8 +485,8 @@ def confirm_with_user(message: str, page=None) -> bool:
                 pass
         with open(path, "w") as f:
             f.write(str(message or "")[:REQUEST_MESSAGE_CAP])
-    if page is not None:
-        _window_on_screen(page, True)
+
+    front = _show_to_person(page)
     deadline = _time.time() + REQUEST_PATIENCE
     while _time.time() < deadline:
         _time.sleep(0.3)
@@ -487,11 +503,11 @@ def confirm_with_user(message: str, page=None) -> bool:
                 with open(answer_path) as f:
                     done = f.read(20).strip() == "done"
                 if done:
-                    _window_on_screen(page, False)
+                    _take_from_person(page, front)
                     _back_where_it_meant_to_be(page)
                     return True
                 break
-    _window_on_screen(page, False)
+    _take_from_person(page, front)
     raise NobodyAnsweredError(str(message or "")[:REQUEST_MESSAGE_CAP])
 
 # A site that sends you somewhere else after a login is undone: the step goes back to the page it was opening
@@ -504,6 +520,27 @@ def _back_where_it_meant_to_be(page) -> None:
         page.wait_for_timeout(1000)
     except Exception:
         pass
+
+# Puts the window in front of the person for something only they can do; returns the app they were working in
+def _show_to_person(page) -> str:
+    if page is None:
+        return ""
+    with diskguard.harness():
+        front = _front_app()
+    _window_on_screen(page, True)
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    return front
+
+# Moves the window away again and gives the focus back to the app the person was working in
+def _take_from_person(page, front: str) -> None:
+    if page is None:
+        return
+    _window_on_screen(page, False)
+    with diskguard.harness():
+        _hand_focus_back(front)
 
 # Brings the window where the person can see it, and puts it back afterwards
 def _window_on_screen(page, show: bool) -> None:
@@ -811,6 +848,32 @@ def _file_name(url: str) -> str:
 
 DATA_KINDS = ("xhr", "fetch", "websocket", "eventsource", "document")
 
+ASSET_TYPES = (("css", "stylesheet"), ("javascript", "script"), ("ecmascript", "script"),
+               ("font", "font"), ("image/", "image"), ("video/", "media"), ("audio/", "media"))
+
+TRACKING_HOSTS = ("protechts.net", "perimeterx.net", "px-cloud.net", "px-cdn.net",
+                  "google-analytics.com", "googletagmanager.com", "doubleclick.net",
+                  "googlesyndication.com", "connect.facebook.net", "hotjar.com",
+                  "segment.io", "segment.com")
+
+# Which kind a call's index row belongs to: its own line if it is data, else the kind of file it fetched
+def _call_kind(c: dict) -> tuple:
+    kind = str(c.get("kind") or "other")
+    ctype = str(c.get("type") or "").lower()
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(str(c.get("url") or "")).hostname or "").lower()
+    except ValueError:
+        host = ""
+    if any(host == h or host.endswith("." + h) for h in TRACKING_HOSTS):
+        return "tracking", False
+    if str(c.get("method") or "").upper() == "HEAD":
+        return "check", False
+    for part, asset in ASSET_TYPES:
+        if part in ctype:
+            return asset, False
+    return kind, kind in DATA_KINDS or "json" in ctype
+
 # A call's address with its numbers and paging masked, so repeats of one address fold together
 def _call_pattern(url: str) -> str:
     from urllib.parse import urlsplit
@@ -828,8 +891,7 @@ def fold_calls(calls: list) -> list:
     kinds: dict = {}
     for i, c in enumerate(calls or []):
         line = {"id": i, **c}
-        kind = str(c.get("kind") or "other")
-        data = kind in DATA_KINDS or "json" in str(c.get("type") or "").lower()
+        kind, data = _call_kind(c)
         if not data:
             k = kinds.setdefault(kind, {"kind": kind, "count": 0, "ids": [], "bytes": 0})
             k["count"] += 1
@@ -854,21 +916,21 @@ def fold_calls(calls: list) -> list:
         ats = sorted(g["ats"])
         gaps = [b - a for a, b in zip(ats, ats[1:])]
         first = g["row"]
+
+        pattern = _call_pattern(first.get("url") or "")
         out.append({"id": g["ids"][0], "ids": g["ids"], "count": len(g["ids"]),
                     "method": first.get("method"), "url": first.get("url"),
-                    "pattern": _call_pattern(first.get("url") or ""),
+                    **({"pattern": pattern} if pattern != first.get("url") else {}),
                     "kind": first.get("kind"), "type": first.get("type"),
                     "status": sorted(s for s in g["statuses"] if s is not None),
                     "first_at": ats[0], "last_at": ats[-1],
-                    "interval": round(sum(gaps) / len(gaps), 1) if gaps else 0,
-                    "note": f"{len(g['ids'])} calls to one address, folded; "
-                            "unfold with read_input(\"calls\", ids=[...])"})
+                    "interval": round(sum(gaps) / len(gaps), 1) if gaps else 0})
     for kind, k in kinds.items():
         out.append({"kind": kind, "count": k["count"], "ids": k["ids"],
-                    **({"bytes": k["bytes"]} if k["bytes"] else {}),
-                    "note": f"{k['count']} {kind} calls, folded; the full inventory is "
-                            f"read_input(\"calls\", kind=\"{kind}\")"})
+                    **({"bytes": k["bytes"]} if k["bytes"] else {})})
     return out
+
+CALLS_NOTE = ("A row with `count` stands for several requests: either repeats of one address, or every request of one kind of page file (stylesheet, script, font, image, media, check for a request that fetched no content, or tracking for bot-defence and analytics scripts the site loads for every visitor). To see those requests one by one, read the calls file in a code try with read_input(\"calls\", ids=[...]) or read_input(\"calls\", kind=\"image\").")
 
 # Every call this step's window made, newest last, with how many were left out
 def browser_calls() -> dict:
@@ -973,11 +1035,25 @@ def checkpoints() -> dict:
     except (OSError, ValueError):
         return {}
 
+# The values recorded with checkpoint() as a list: for the given keys in their order, or all in the order recorded
+def checkpoint_values(keys: Any = None) -> list:
+    done = checkpoints()
+    if keys is None:
+        return list(done.values())
+    return [done[str(k)] for k in keys if str(k) in done]
+
+FILE_NAME_MAX = 255
+SWAPPED_WRITE_FILE = ("write_file takes the filename first and the contents second, as write_file(\"report.csv\", data); this call passed the contents first")
+
 # Stores a produced file and returns the reference a file-typed output carries
 def write_file(name: str, data) -> str:
     import mimetypes
 
     from storage import blobstore
+
+    if not isinstance(name, str) or not name.strip() or any(c in name for c in "\r\n\x00") \
+            or len(name.encode("utf-8")) > FILE_NAME_MAX:
+        raise TypeError(SWAPPED_WRITE_FILE)
     if isinstance(data, str):
         data = data.encode("utf-8")
     if not isinstance(data, (bytes, bytearray)):

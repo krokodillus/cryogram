@@ -42,6 +42,7 @@ class PlanSave:
         self.logic: dict = {}
         self.created_vars: list = []
         self.note_mapped = False
+        self.note_given = None
 
     @property
     def turn(self):
@@ -105,17 +106,20 @@ def harness_keys(s: PlanSave) -> Optional[dict]:
         plan.pop("change_note", None)
     else:
         fnote = plan.pop("fix_note", None)
-        if isinstance(fnote, dict) and s.workflow.get("nodes") \
-                and not isinstance(plan.get("change_note"), dict):
+        if isinstance(fnote, dict) and not isinstance(plan.get("change_note"), dict):
             plan["change_note"] = {"found": str(fnote.get("went_wrong") or "").strip(),
                                    "will_change": str(fnote.get("will_change") or "").strip()}
             s.note_mapped = True
 
         note = plan.get("change_note") if isinstance(plan.get("change_note"), dict) else {}
         prev_note = prev0.get("change_note") if isinstance(prev0.get("change_note"), dict) else {}
-        found = str(note.get("found") or prev_note.get("found") or "").strip()
-        what = str(note.get("will_change") or prev_note.get("will_change") or "").strip()
-        if s.workflow.get("nodes") and (found or what):
+        given = {"found": str(note.get("found") or "").strip(),
+                 "will_change": str(note.get("will_change") or "").strip()}
+        s.note_given = given if (given["found"] or given["will_change"]) \
+            and given != {k: str(prev_note.get(k) or "").strip() for k in given} else None
+        found = given["found"] or str(prev_note.get("found") or "").strip()
+        what = given["will_change"] or str(prev_note.get("will_change") or "").strip()
+        if found or what:
             plan["change_note"] = {"found": found, "will_change": what}
         else:
             plan.pop("change_note", None)
@@ -227,7 +231,8 @@ def identity(s: PlanSave) -> Optional[dict]:
         if steps.step_by_ref(workflow, plan, e.get("src")) is None \
                 or steps.step_by_ref(workflow, plan, e.get("dst")) is None:
             errors.append(f"edge {e.get('src')!r} -> {e.get('dst')!r}: both ends must "
-                          "be plan nodes or existing nodes (by name or id)")
+                          "be plan nodes or existing nodes (by name or id); "
+                          + steps.steps_that_exist(workflow, plan))
             continue
         if e.get("when") and not steps.expr_ok(e["when"]):
             errors.append(f"edge {e.get('src')!r} -> {e.get('dst')!r}: when must be a "
@@ -272,17 +277,19 @@ def continuity(s: PlanSave) -> Optional[dict]:
         raw_ch = s.changes if isinstance(s.changes, dict) else {}
         removed = {steps.humanise_name(x) for x in (raw_ch.get("removed") or [])
                    if str(x or "").strip()}
+
+        removed_ids = {str(x) for x in (raw_ch.get("removed") or []) if str(x or "").strip()}
         new_names = {steps.humanise_name(n.get("name")) for n in nodes
                      if str(n.get("name") or "").strip()}
         new_ids = {str(n.get("id")) for n in nodes if n.get("id")}
         vanished = [nm for nm, pid in prev_steps
                     if nm not in new_names and nm not in removed
                     and nm not in s.renames
-                    and not (pid and pid in new_ids)]
+                    and not (pid and (pid in new_ids or pid in removed_ids))]
         if vanished:
             errors.append("these steps vanished from the plan: "
                           + ", ".join(f'"{v}"' for v in vanished)
-                          + " - carry them forward (amend:true resends only the changed steps), or list them under changes.removed if the user agreed to drop them")
+                          + " - a save with replace:true starts the plan over and must list every step; leave replace out to change only some steps (a save keeps every step it does not mention), or list a step under changes.removed, by its id or name, if the user agreed to drop it")
     if errors:
         if nodes:
             bad_edges = any(str(e).startswith("edge ") for e in errors)
@@ -307,10 +314,11 @@ def evidence(s: PlanSave) -> Optional[dict]:
     return None
 
 CHANGE_NOTE_NEEDED = (
-    "a change to a built workflow needs `change_note`: {\"found\": \"<one or two plain sentences - what you found about what the user asked or noticed, in their words>\", \"will_change\": \"<what you will change and why - plain words, no code, tool or field names>\"}. The user reads these at the top of the card.")
+    "a save that shows the user a change - to a built workflow, or to the steps they approved - needs `change_note`: {\"found\": \"<one or two plain sentences - what you found about what the user asked or noticed, in their words>\", \"will_change\": \"<what you will change and why - plain words, no code, tool or field names>\"}. The user reads these at the top of the card.")
 
 def change_note(s: PlanSave) -> Optional[dict]:
-    if steps.change_needs_approval(s.workflow, s.plan):
+    if steps.change_needs_approval(s.workflow, s.plan) \
+            or steps.plan_steps_need_approval(s.workflow, s.plan):
         note = s.plan.get("change_note") or {}
         if not note.get("found") or not note.get("will_change"):
             return {"ok": False, "errors": [CHANGE_NOTE_NEEDED]}
@@ -606,6 +614,21 @@ def retarget_deliverables(s: PlanSave) -> Optional[dict]:
         s.workflow["deliverables"] = kept
     return None
 
+# The plan's gaps from a check's findings, with the missing run instructions once every step is ready
+def _gaps_of(workflow: dict, plan: dict, logic: dict, untested) -> list:
+    gaps = list(logic["findings"]) if not logic["ok"] else []
+    if not gaps and plan.get("nodes") and not untested \
+            and not str((workflow.get("intent") or {}).get("instructions") or "").strip():
+        gaps = ["the workflow has no user instructions yet - save_intent with instructions: how to start it, where each setting lives and how to find its value, and what connected services must stay set up (someone new should be able to run it from that text alone)"]
+    return gaps
+
+# The plan's gaps worked out now, after filling code and prompts from the tries made since the save
+def gaps_now(workflow: dict, plan: dict) -> list:
+    steps.fill_from_cells(workflow["id"], plan.get("nodes") or [])
+    logic = plan_logic.check(workflow, plan)
+    return _gaps_of(workflow, plan, logic,
+                    steps.untested_steps(workflow, plan.get("nodes") or []))
+
 def logic_and_settings(s: PlanSave) -> Optional[dict]:
     workflow, plan = s.workflow, s.plan
     logic = plan_logic.check(workflow, plan)
@@ -628,10 +651,7 @@ def logic_and_settings(s: PlanSave) -> Optional[dict]:
             + ", ".join(steps.humanise_name(n) for n in s.created_vars)
             + " - the first run asks for any that are still empty.")
         logic = plan_logic.check(workflow, plan)
-    gaps = list(logic["findings"]) if not logic["ok"] else []
-    if not gaps and plan.get("nodes") and not s.untested \
-            and not str((workflow.get("intent") or {}).get("instructions") or "").strip():
-        gaps = ["the workflow has no user instructions yet - save_intent with instructions: how to start it, where each setting lives and how to find its value, and what connected services must stay set up (someone new should be able to run it from that text alone)"]
+    gaps = _gaps_of(workflow, plan, logic, s.untested)
     if gaps:
         plan["design_gaps"] = gaps
     else:
@@ -652,6 +672,8 @@ def persist_and_card(s: PlanSave) -> Optional[dict]:
         s.turn.opening_card_show_now = True
     elif steps.plan_steps_need_approval(workflow, plan):
         s.turn.opening_card_show_now = True
+    if not s.turn.opening_card_show_now and s.note_given:
+        s.turn.note_to_show = s.note_given
     steps.save(workflow)
     return None
 

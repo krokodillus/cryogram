@@ -104,6 +104,31 @@ class TrailTest(unittest.TestCase):
         got = node_tools.tool_read_earlier_result(p, id=str(rid), path="data.output.nope")
         self.assertIn("rows, text", got["results"][0]["error"])
 
+    def test_after_a_green_build_every_try_is_still_listed(self):
+        import time
+        from agent import cells
+        p = _workflow([{"id": "n_1", "name": "Read the page", "type": "code"}], pid="p_trail_inv")
+        cells.record(p["id"], "Read the page", "write_output('rows', [1])", {}, {"rows": [1]}, True, 0.1, [])
+        cells.record(p["id"], "check the shape", "write_output('n', 1)", {}, {"n": 1}, True, 0.1, [])
+        p.setdefault("plan", {})["built_ts"] = time.time() + 1
+        listed = context._recorded_context(p)
+
+        self.assertIn("Read the page", listed)
+        self.assertIn("check the shape", listed)
+
+    def test_a_guide_that_changed_since_it_was_loaded_is_not_replayed_whole(self):
+        from agent.actions import read_skill_or_learning
+        current = read_skill_or_learning("google-sheets")["content"]
+        same = {"kind": "tool", "id": 1, "name": "load_skill", "args": {"id": "google-sheets"},
+                "result": {"ok": True, "data": {"content": current}}}
+        old = {**same, "result": {"ok": True, "data": {"content": "an old wording"}}}
+        unchanged = trail._render_item(same)
+        self.assertIn("Connecting to Google Sheets", unchanged)
+        self.assertNotIn("has changed since you loaded it", unchanged)
+        line = trail._render_item(old)
+        self.assertIn("has changed since you loaded it", line)
+        self.assertNotIn("an old wording", line)
+
     def test_the_live_turn_is_never_replayed_into_itself(self):
         p = _workflow([], pid="p_trail2")
         trail.begin(p["id"], "t_live", "hello", "chat")

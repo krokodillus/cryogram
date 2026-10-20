@@ -364,6 +364,15 @@ class ThreeExitsTest(unittest.TestCase):
         p2["tickets"][0]["status"] = "ready"
         self.assertIn("error", node_tools.tool_close_issue(p2, "tkt_5ae001", "bad-data", "x"))
 
+    def test_close_issue_works_inside_the_repair_turn(self):
+        from agent import node_tools
+        p = self._workflow_with_issue("p_exit1c")
+        p["tickets"][0]["status"] = "investigating"
+        r = node_tools.tool_close_issue(p, "tkt_5ae001", "fixed-elsewhere",
+                                        "the endpoint answered 500 for a while and has recovered")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(p["tickets"][0]["status"], "closed")
+
     def test_the_brief_names_the_three_exits(self):
         from agent import orchestrator
         p = self._workflow_with_issue("p_exit2")

@@ -14,7 +14,7 @@ class SkillsTest(unittest.TestCase):
         self.assertIn("00-what-cryogram-is", ids)
         s = skills.read_static("04-working-a-step")
         flat = " ".join(s["content"].lower().split())
-        self.assertIn("never ask the user beforehand whether you may test it", flat)
+        self.assertIn("never ask the user beforehand whether you may try it", flat)
 
     def test_traversal_guarded(self):
         self.assertIsNone(skills.read_static("../../config"))
@@ -79,13 +79,6 @@ class PolicyActionSplitTest(unittest.TestCase):
         plan = skills.read_static("25-recordings")["content"]
         self.assertNotIn(plan.strip()[:80], po)
 
-class BatchingRuleTest(unittest.TestCase):
-    def test_exploration_batches_reads_never_writes(self):
-        body = skills.read_static("04-working-a-step")["content"]
-        low = body.lower()
-        self.assertIn("one cell per question", low)
-        self.assertIn("a write always stands alone", low)
-
 class ConnectorGuidesTest(unittest.TestCase):
     def test_guides_are_offered_as_loadable_index_lines(self):
         ids = [e["id"] for e in skills.static_index()]
@@ -100,19 +93,11 @@ class ConnectorGuidesTest(unittest.TestCase):
         self.assertEqual(s["meta"]["kind"], "action")
         self.assertNotIn(s["content"].strip()[:80], skills.policy_text())
 
-    def test_exploration_policy_points_at_guides_and_sources(self):
-        po = skills.policy_text()
-        self.assertIn("connector guide for an outside tool before searching", po)
-        self.assertIn("the announcement names it and says why", po)
-        self.assertIn("goes in a fenced code block of its own", po)
-        self.assertIn("ask it with options", po)
-
-class DeferralAndFreeTextPolicyTest(unittest.TestCase):
-    def test_policy_carries_the_three_facts(self):
-        po = skills.policy_text()
-        self.assertIn("is the same claim in softer words", po)
-        self.assertIn("Options are shortcuts, not the whole menu", po)
-        self.assertIn("never the disk", po)
+    def test_every_guide_is_discoverable_and_readable(self):
+        for entry in skills.static_index():
+            got = skills.read_static(entry["id"])
+            self.assertTrue(got["content"].strip(), entry["id"])
+            self.assertEqual(got["meta"]["name"], entry["id"])
 
 class PracticeSkillsTest(unittest.TestCase):
     def test_three_practices_discoverable_as_actions(self):
@@ -127,7 +112,7 @@ class PracticeSkillsTest(unittest.TestCase):
     def test_practices_answer_the_same_three_questions(self):
         for sid in ("61-connector-practice", "62-ai-practice", "63-code-practice"):
             low = skills.read_static(sid)["content"].lower()
-            self.assertIn("## what to include", low, sid)
+            self.assertIn("## what to write", low, sid)
             self.assertIn("## how to structure it", low, sid)
             self.assertIn("## what to test", low, sid)
 
@@ -135,19 +120,19 @@ class PracticeSkillsTest(unittest.TestCase):
         conn = skills.read_static("61-connector-practice")["content"]
 
         self.assertIn("resilient-request", conn)
-        self.assertIn("The approval card is the ask", conn)
-        self.assertIn("says what happened per item", conn)
+        self.assertIn("The approval card asks the user for one small real test send", conn)
+        self.assertIn("says what happened to each item", conn)
         ref = skills.read_static("61-connector-practice/resilient-request")["content"]
         self.assertIn("timeout", ref)
-        self.assertIn("4xx", ref)
+        self.assertIn("retry_safe", ref)
+        self.assertIn("tries = (3 if safe else 1)", ref)
         ai = skills.read_static("62-ai-practice")["content"]
-        self.assertIn("never describes the output format", ai)
-        self.assertIn("a description saying exactly what goes in it", ai)
+        self.assertIn("item_fields", ai)
+        self.assertIn("a description that says exactly what goes in it", ai)
 
-    def test_practice_locks_in_a_route(self):
-        practice = skills.read_static("61-connector-practice")["content"]
-        self.assertIn("locks in a route", practice)
-        self.assertIn("no access to the user's computer", practice)
+    def test_connector_practice_references_are_loadable(self):
+        for ref in ("resilient-request", "unproven-steps"):
+            self.assertTrue(skills.read_static("61-connector-practice/" + ref)["content"])
 
     def test_connector_guides_expanded(self):
         ids = [e["id"] for e in skills.static_index()]

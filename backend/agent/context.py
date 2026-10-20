@@ -71,6 +71,7 @@ def _recorded_context(workflow: dict) -> str:
         inv = cells.inventory(workflow["id"])
     except Exception:
         return ""
+
     if not inv:
         return ""
     lines = []
@@ -197,7 +198,10 @@ def build(workflow: dict, user_message: str, kind: str = "chat") -> list[dict]:
           + _learnings_context(workflow, user_message))
 
     from agent import trail as _trail
-    memory, since, first_msg = _trail.replay(workflow.get("id") or "")
+    from agent import operating_context
+    loaded, pinned = operating_context.supply(workflow, all_current=True)
+    wf += operating_context.render_state(workflow) + loaded
+    memory, since, first_msg = _trail.replay(workflow.get("id") or "", pinned_skills=pinned)
 
     if kind == "chat":
         older = _recent_chat(workflow, user_message, before=since,

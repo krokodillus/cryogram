@@ -148,34 +148,65 @@ def _anthropic_url(endpoint: str = "") -> str:
 def _anthropic_headers(api_key: str) -> dict:
     return {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
 
-_NO_TEMPERATURE: set = set()
+OPTIONAL_SETTINGS: dict[str, dict[str, tuple]] = {
+    "anthropic": {"temperature": ("temperature",)},
+    "openai": {"temperature": ("temperature",)},
+    "gemini": {"temperature": ("generationConfig", "temperature")},
+}
 
-remember_no_temperature = None
+_REFUSED: dict[str, set] = {}
 
-# Remembers a model that refused a temperature, in memory and through the installed hook
-def _learned_no_temperature(model: str) -> None:
-    _NO_TEMPERATURE.add(model)
-    if remember_no_temperature is not None:
+remember_refusal = None
+
+# Remembers a model that refused a setting, in memory and through the installed hook
+def _learned_refusal(model: str, setting: str) -> None:
+    _REFUSED.setdefault(model, set()).add(setting)
+    if remember_refusal is not None:
         try:
-            remember_no_temperature(model)
+            remember_refusal(model, setting)
         except Exception:
             pass
 
-# One Anthropic POST that drops `temperature` when the model refuses it, and remembers
+def _has(payload: dict, path: tuple) -> bool:
+    node = payload
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return False
+        node = node[key]
+    return True
+
+def _without(payload: dict, path: tuple) -> dict:
+    if not _has(payload, path):
+        return payload
+    if len(path) == 1:
+        return {k: v for k, v in payload.items() if k != path[0]}
+    return {**payload, path[0]: _without(payload[path[0]], path[1:])}
+
+# One request that leaves out what the model refused before, and on a 400 naming an optional setting sends once more without it
+def _send_optional(route: str, model: str, payload: dict, send) -> dict:
+    settings = OPTIONAL_SETTINGS.get(route, {})
+    for name in _REFUSED.get(model, ()):
+        if name in settings:
+            payload = _without(payload, settings[name])
+    tried: set = set()
+    while True:
+        try:
+            return send(payload)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            hit = next((n for n, path in settings.items()
+                        if e.code == 400 and n not in tried and n in body and _has(payload, path)), None)
+            if not hit:
+                raise urllib.error.HTTPError(e.url, e.code, e.reason, e.headers,
+                                             io.BytesIO(body.encode()))
+            tried.add(hit)
+            _learned_refusal(model, hit)
+            payload = _without(payload, settings[hit])
+
+# One Anthropic POST through the optional-setting rule
 def _anthropic_post(url: str, payload: dict, headers: dict, timeout: int | None) -> dict:
-    model = str(payload.get("model") or "")
-    if model in _NO_TEMPERATURE:
-        payload = {k: v for k, v in payload.items() if k != "temperature"}
-    try:
-        return _post(url, payload, headers, timeout)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        if e.code == 400 and "temperature" in body and "temperature" in payload:
-            _learned_no_temperature(model)
-            return _post(url, {k: v for k, v in payload.items() if k != "temperature"},
-                         headers, timeout)
-        raise urllib.error.HTTPError(e.url, e.code, e.reason, e.headers,
-                                     io.BytesIO(body.encode()))
+    return _send_optional("anthropic", str(payload.get("model") or ""), payload,
+                          lambda p: _post(url, p, headers, timeout))
 
 # The plain-text Anthropic call
 def anthropic_messages(model: str, messages: list[dict], api_key: str,
@@ -201,7 +232,60 @@ def anthropic_messages(model: str, messages: list[dict], api_key: str,
     except Exception as e:
         return f"(request failed) {e}"
 
-# The structured Anthropic call: forced tool use makes the answer match the declared schema
+_ANTHROPIC_UNSUPPORTED = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+                          "multipleOf", "minLength", "maxLength", "maxItems", "pattern"}
+
+_ANTHROPIC_FORMATS = {"date-time", "time", "date", "duration", "email", "hostname",
+                      "uri", "ipv4", "ipv6", "uuid"}
+
+ANTHROPIC_UNION_LIMIT = 16
+
+# The declared schema in the form Anthropic's JSON output takes: our markers and unsupported limits left out
+def _anthropic_schema(schema: Any) -> Any:
+    if isinstance(schema, list):
+        return [_anthropic_schema(v) for v in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for k, v in schema.items():
+        if str(k).startswith("x-") or k in _ANTHROPIC_UNSUPPORTED:
+            continue
+        if k == "format" and v not in _ANTHROPIC_FORMATS:
+            continue
+        if k == "minItems" and v not in (0, 1):
+            continue
+        out[k] = v if k in ("enum", "const", "required") else _anthropic_schema(v)
+    if out.get("type") == "object" or "properties" in out:
+        out["additionalProperties"] = False
+    return out
+
+def _union_count(schema: Any) -> int:
+    if isinstance(schema, list):
+        return sum(_union_count(v) for v in schema)
+    if not isinstance(schema, dict):
+        return 0
+    here = 1 if isinstance(schema.get("type"), list) or "anyOf" in schema else 0
+    return here + sum(_union_count(v) for v in schema.values() if isinstance(v, (dict, list)))
+
+# Every top-level answer field may also be null, so a value the model cannot find comes back empty instead of invented
+def anthropic_answer_schema(schema: dict) -> dict:
+    out = _anthropic_schema(schema)
+    props = out.get("properties")
+    if not isinstance(props, dict):
+        return out
+    adding = [k for k, v in props.items()
+              if isinstance(v, dict) and isinstance(v.get("type"), str)]
+    if _union_count(out) + len(adding) > ANTHROPIC_UNION_LIMIT:
+        return out
+    for k in adding:
+        frag = dict(props[k])
+        frag["type"] = [frag["type"], "null"]
+        if "enum" in frag:
+            frag["enum"] = list(frag["enum"]) + [None]
+        props[k] = frag
+    return out
+
+# The structured Anthropic call: Anthropic's JSON output holds the answer to the declared schema
 def anthropic_structured(model: str, messages: list[dict], api_key: str,
                          schema: dict, max_tokens: int | None = None,
                          temperature: float | None = None,
@@ -209,20 +293,25 @@ def anthropic_structured(model: str, messages: list[dict], api_key: str,
                          timeout: int | None = None) -> dict:
     payload = _with_temperature({"model": model, "max_tokens": clamp_tokens(max_tokens),
                "messages": messages,
-               "tools": [{"name": "emit_output",
-                          "description": "Return the node's output fields.",
-                          "input_schema": schema}],
-               "tool_choice": {"type": "tool", "name": "emit_output"}}, temperature)
+               "output_config": {"format": {"type": "json_schema",
+                                            "schema": anthropic_answer_schema(schema)}}},
+                                temperature)
     try:
         data = _anthropic_post(_anthropic_url(endpoint), payload, _anthropic_headers(api_key), timeout)
         _note_usage(data)
-        if str(data.get("stop_reason") or "") in _TRUNCATED:
+        stop = str(data.get("stop_reason") or "")
+        if stop in _TRUNCATED:
             return {"text": "the answer was cut off before it finished - this step needs more room than it was given",
                     "error_kind": "max-tokens"}
-        block = next((b for b in data.get("content", []) if b.get("type") == "tool_use"), None)
-        if block is not None:
-            return {"structured": block.get("input", {})}
-        return {"text": "(no structured output in response)"}
+        text = "".join(b.get("text", "") for b in data.get("content", [])
+                       if b.get("type") == "text").strip()
+        if stop == "refusal":
+            return {"text": "the model declined to answer: " + (text or "no reason given")}
+        try:
+            got = json.loads(text)
+        except ValueError:
+            return {"text": text or "(no structured output in response)"}
+        return {"structured": got} if isinstance(got, dict) else {"text": text}
     except Exception as e:
         return {"text": _err_text(e), "error_kind": _err_kind(e)}
 
@@ -234,25 +323,20 @@ def _openai_post(base: str, payload: dict, api_key: str,
                      {"authorization": f"Bearer {api_key}"}, timeout)
         _note_usage(data, "openai")
         return data
-    model = str(payload.get("model") or "")
-    if model in _NO_TEMPERATURE:
-        payload = {k: v for k, v in payload.items() if k != "temperature"}
-    try:
-        return send(payload)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        if e.code == 400 and "max_completion_tokens" in body \
-                and "max_completion_tokens" in payload:
-            legacy = {**payload, "max_tokens":
-                      payload["max_completion_tokens"]}
-            legacy.pop("max_completion_tokens", None)
-            return send(legacy)
+    def send_either_key(p: dict) -> dict:
+        try:
+            return send(p)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            if e.code == 400 and "max_completion_tokens" in body \
+                    and "max_completion_tokens" in p:
+                legacy = {**p, "max_tokens": p["max_completion_tokens"]}
+                legacy.pop("max_completion_tokens", None)
+                return send(legacy)
+            raise urllib.error.HTTPError(e.url, e.code, e.reason, e.headers,
+                                         io.BytesIO(body.encode()))
 
-        if e.code == 400 and "temperature" in body and "temperature" in payload:
-            _learned_no_temperature(model)
-            return send({k: v for k, v in payload.items() if k != "temperature"})
-        raise urllib.error.HTTPError(e.url, e.code, e.reason, e.headers,
-                                     io.BytesIO(body.encode()))
+    return _send_optional("openai", str(payload.get("model") or ""), payload, send_either_key)
 
 def _openai_finished_early(data: dict) -> bool:
     return str((data.get("choices") or [{}])[0].get("finish_reason") or "") in _TRUNCATED
@@ -320,7 +404,10 @@ def _gemini_call(model: str, parts: list, api_key: str, schema: dict | None,
         gen["responseJsonSchema"] = _gemini_schema(schema)
     payload = {"contents": [{"role": "user", "parts": parts}],
                "generationConfig": gen}
-    data = _post(_gemini_url(model, endpoint), payload, {"x-goog-api-key": api_key}, timeout)
+
+    data = _send_optional("gemini", model, payload,
+                          lambda p: _post(_gemini_url(model, endpoint), p,
+                                          {"x-goog-api-key": api_key}, timeout))
     _note_usage(data, "gemini")
     return data
 

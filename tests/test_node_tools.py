@@ -31,6 +31,7 @@ def _pdf_with_text(text):
 
 from agent import node_tools
 from agent import turnstate
+from agent import transcript
 
 def _user_approved(p):
     import time as _t
@@ -815,7 +816,10 @@ class ProvenBuildGateTest(unittest.TestCase):
                           return_value={"ok": False, "findings": ["port mismatch"]}):
             r = node_tools.tool_save_plan(p, dict(plan))
         self.assertEqual(p["plan"]["design_gaps"], ["port mismatch"])
-        b = node_tools.tool_build_workflow(p)
+
+        with patch.object(node_tools.plan_logic, "check",
+                          return_value={"ok": False, "findings": ["port mismatch"]}):
+            b = node_tools.tool_build_workflow(p)
         self.assertIn("design gaps", b.get("error", ""))
         self.assertNotIn("_pending_build", p)
         _user_approved(p)
@@ -974,6 +978,123 @@ class FeedbackBatchTest(unittest.TestCase):
         self.assertFalse(r3.get("ok"), r3)
         self.assertIn("vanished", str(r3.get("errors")))
 
+    def test_a_removed_step_takes_its_lines_with_it(self):
+        p = _workflow([], pid="p_rmline")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            self._step("Upload", id="csv_input"), self._step("Filter", id="filter_csv")],
+            "edges": [{"src": "csv_input", "dst": "filter_csv"}]})
+        r = node_tools.tool_save_plan(p, {"summary": "Do.", "edges": [],
+                                          "nodes": [self._step("Upload", id="csv_input")],
+                                          "changes": {"removed": ["filter_csv"]}})
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual([n["id"] for n in p["plan"]["nodes"]], ["csv_input"])
+        self.assertEqual(p["plan"].get("edges") or [], [])
+
+    def test_a_removal_by_id_is_not_a_vanished_step(self):
+        p = _workflow([], pid="p_rmid")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            self._step("Upload", id="csv_input"), self._step("Filter", id="filter_csv")],
+            "edges": [{"src": "csv_input", "dst": "filter_csv"}]})
+        r = node_tools.tool_save_plan(p, {"summary": "Do.", "replace": True,
+                                          "nodes": [self._step("Upload", id="csv_input")],
+                                          "changes": {"removed": ["filter_csv"]}})
+        self.assertNotIn("vanished", str(r.get("errors")), r)
+
+    def _approved(self, pid):
+        from agent import steps
+        p = _workflow([], pid=pid)
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            self._step("Upload", id="csv_input"), self._step("Filter", id="filter_csv")],
+            "edges": [{"src": "csv_input", "dst": "filter_csv"}]})
+        p["plan_approved_ts"] = 1.0
+        p["approved_steps"] = steps.approved_steps_of(p["plan"])
+        transcript.append_request(p, "blueprint", {"head": "plan"}, iid="blu_first")
+        transcript.append_answer(p, "blu_first", "Looks right - go ahead")
+        return p
+
+    def test_a_changed_plan_before_the_build_needs_and_shows_its_note(self):
+        from agent import steps
+        p = self._approved("p_note_pre")
+        bare = node_tools.tool_save_plan(p, {"nodes": [], "changes": {"removed": ["filter_csv"]}})
+        self.assertFalse(bare.get("ok"), bare)
+        self.assertIn("change_note", str(bare.get("errors")))
+        noted = node_tools.tool_save_plan(p, {"nodes": [], "changes": {"removed": ["filter_csv"]},
+                                              "change_note": {"found": "the upload already filters",
+                                                              "will_change": "drop the filter step"}})
+        self.assertTrue(noted.get("ok"), noted)
+        card = steps.opening_card_payload(p, p["plan"], "plan")
+        self.assertTrue(card.get("plan_changed"))
+        self.assertEqual(card["change_note"]["found"], "the upload already filters")
+        self.assertIsNone(turnstate.of(p).note_to_show)
+
+    def test_a_note_on_a_save_with_no_card_is_said_in_the_chat(self):
+        from agent import steps
+        p = self._approved("p_note_chat")
+        r = node_tools.tool_save_plan(p, {"nodes": [self._step("Filter rows", id="filter_csv")],
+                                          "change_note": {"found": "the name said too little",
+                                                          "will_change": "rename the filter step"}})
+        self.assertTrue(r.get("ok"), r)
+        note = turnstate.of(p).note_to_show
+        self.assertEqual(steps.note_lines(note),
+                         "What I found: the name said too little\nWhat will change: rename the filter step")
+
+        from agent import actions
+        got = actions.execute(p, {"name": "save_plan", "input": {"plan": {
+            "nodes": [self._step("Filter rows", id="filter_csv")],
+            "change_note": {"found": "the filter kept blank rows",
+                            "will_change": "skip rows with no amount"}}}}, None)
+        self.assertTrue(got.get("ok"), got)
+        said = [i for i in p.get("transcript") or [] if i.get("kind") == "message"
+                and i.get("from") == "assistant"]
+        self.assertIn("What I found: the filter kept blank rows", said[-1]["text"])
+
+        turnstate.of(p).take("note_to_show")
+        node_tools.tool_save_plan(p, {"nodes": [self._step("Filter rows", id="filter_csv")]})
+        self.assertIsNone(turnstate.of(p).note_to_show)
+
+    def test_the_first_opening_card_carries_no_note(self):
+        from agent import steps
+        p = _workflow([], pid="p_note_first")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [self._step("Upload", id="csv_input")],
+                                      "change_note": {"found": "x", "will_change": "y"}})
+        self.assertNotIn("change_note", steps.opening_card_payload(p, p["plan"], "plan"))
+
+    def test_the_click_on_a_card_before_the_build_spends_its_note(self):
+        from agent import reply
+        p = self._approved("p_note_click")
+        node_tools.tool_save_plan(p, {"nodes": [], "changes": {"removed": ["filter_csv"]},
+                                      "change_note": {"found": "f", "will_change": "w"}})
+        req = transcript.append_request(p, "blueprint", {"head": "plan", "options": ["Looks right - go ahead"]},
+                                        iid="blu_changed")
+        reply.settle(p, req, {"text": "Looks right - go ahead", "via": "click", "cid": "c"})
+        self.assertNotIn("change_note", p["plan"])
+        self.assertEqual(p["approved_steps"], [{"name": "Upload", "type": "code"}])
+
+    def test_a_line_to_an_unknown_step_names_the_steps_that_exist(self):
+        p = _workflow([], pid="p_badline")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        r = node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            self._step("Upload", id="csv_input"), self._step("Filter", id="filter_csv")],
+            "edges": [{"src": "start", "dst": "csv_input"}]})
+        self.assertFalse(r.get("ok"), r)
+        self.assertIn("csv_input (Upload)", str(r.get("errors")))
+        self.assertIn("filter_csv (Filter)", str(r.get("errors")))
+
+    def test_a_planned_step_is_readable_and_an_unknown_one_names_the_real_ones(self):
+        p = _workflow([], pid="p_readplan")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            self._step("Upload", id="csv_input")]})
+        got = node_tools.tool_read_node(p, "csv_input")
+        self.assertTrue(got.get("planned"), got)
+        self.assertEqual(got["node"]["name"], "Upload")
+        miss = node_tools.tool_read_node(p, "nope")
+        self.assertIn("csv_input (Upload)", miss.get("error", ""))
+
     def test_a_loaded_guide_rides_the_working_trail_into_the_next_turn(self):
         from agent import actions as _actions, context as _ctx, trail
         p = _workflow([], pid="p_fb5")
@@ -987,7 +1108,8 @@ class FeedbackBatchTest(unittest.TestCase):
         self.assertIn("[working memory]", body)
         self.assertIn("you called load_skill", body)
 
-        self.assertIn("Three proven routes. Present the viable ones", body)
+        from agent import skills
+        self.assertIn(skills.read_static("google-sheets")["content"].strip(), body)
 
     def test_describe_save_plan_is_stage_honest(self):
         from agent import orchestrator
@@ -1375,6 +1497,40 @@ class CellAndPlanEdgeCasesTest(unittest.TestCase):
         judge = next(n for n in p["plan"]["nodes"] if n["name"] == "Judge")
         self.assertEqual([o["name"] for o in judge["outputs"]], ["verdict2"])
 
+    def test_a_step_resent_with_its_name_as_id_keeps_its_id_and_lines(self):
+        p = _workflow([], pid="p_s7g")
+        self._full_plan(p)
+        before = {n["name"]: n["id"] for n in p["plan"]["nodes"]}
+        r = node_tools.tool_save_plan(p, {"nodes": [
+            {"id": "Judge", "name": "Judge", "type": "ai", "prompt": "judge harder"}]})
+        self.assertTrue(r.get("ok"), r)
+        after = {n["name"]: n["id"] for n in p["plan"]["nodes"]}
+        self.assertEqual(after, before)
+        self.assertEqual(len(p["plan"]["edges"]), 2)
+
+    def test_a_try_of_an_undeclared_input_says_to_declare_it(self):
+        from runtime import capability
+        capability._ctx["inputs"] = {}
+        with self.assertRaises(KeyError) as e:
+            capability._read_input("spreadsheet_id", False, False)
+        self.assertIn("add it to the step's inputs", str(e.exception))
+
+    def test_the_code_check_names_an_undeclared_input_before_the_try_runs(self):
+        from types import SimpleNamespace
+        from agent import cell_gates
+        p = _workflow([], pid="p_s7h")
+        c = SimpleNamespace(workflow=p, is_browser=False, inputs={"rows": []},
+                            code="a = read_input('rows')\n"
+                                 "b = read_input('spreadsheet_id')\n"
+                                 "c = read_input('max_rows')\n"
+                                 "write_output('n', a)",
+                            plan_step={"inputs": [{"name": "max_rows", "type": "number"}]})
+        got = cell_gates.gate_code_check(c)
+        self.assertIn("'spreadsheet_id', which is not one of this step's declared inputs",
+                      got["error"])
+        self.assertNotIn("'max_rows'", got["error"])
+        self.assertNotIn("'rows'", got["error"])
+
     def test_amend_removed_still_drops(self):
         p = _workflow([], pid="p_s7d")
         self._full_plan(p)
@@ -1471,6 +1627,14 @@ class CellAndPlanEdgeCasesTest(unittest.TestCase):
         self.assertEqual(r.get("domain"), "example.test")
         self.assertNotIn("sends", r)
         self.assertNotIn("missing", r)
+        self.assertNotIn("needs_person", r)
+
+        r = node_tools.tool_run_cell(
+            p, "Fetch posts",
+            "confirm_with_user('Log in, then confirm here', page)\n"
+            "write_output('posts', [])",
+            reason="log in first")
+        self.assertTrue(r.get("needs_person"))
 
     def test_browser_relaunch_without_reason_asks_for_one(self):
         p = self._browser_proj("p_s8a2")
@@ -1843,7 +2007,12 @@ class EvidenceKeyGatesTest(unittest.TestCase):
         r = node_tools.tool_run_cell(
             p, "Parse the page",
             "write_output('debug_marker', 'checking attribution')")
-        self.assertIn("OWN plain name", r.get("error", ""))
+
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(r.get("cell"), "Probe of Parse the page")
+        self.assertIn("ran as a probe", r.get("note", ""))
+        self.assertEqual(cells.latest_ok("p_evk2", "Parse the page")["code"],
+                         "the real proven code")
 
         r2 = node_tools.tool_run_cell(
             p, "Parse the page", "write_output('rows', [9])")
@@ -2376,6 +2545,15 @@ class BuildIsAToolTest(unittest.TestCase):
         self.assertEqual(card["done"], steps.DONE_LINES)
         self.assertIn("OVER", node_tools.turn_over_error(p, "save_plan"))
 
+    def test_a_first_build_card_carries_no_change_list(self):
+        p, actions = self._proven("p_bit_first")
+        p["plan"]["changes"] = {"removed": ["Select people"]}
+        env = actions.execute(p, {"name": "build_workflow", "input": {}}, lambda ev: None)
+        self.assertTrue(env["ok"], env)
+        from agent import transcript
+        card = transcript.last_request(p, "blueprint")["payload"]
+        self.assertFalse(any((card.get("changes") or {}).values()), card.get("changes"))
+
     def test_a_failed_build_leaves_the_workflow_as_it_was(self):
         from unittest import mock
         from agent import orchestrator
@@ -2450,7 +2628,10 @@ class BuildFixTriggerTest(unittest.TestCase):
         p["plan"] = {"status": "draft", "summary": "s",
                      "nodes": [{"name": "x", "type": "code",
                                 "code": "write_output('y', 1)"}]}
-        r = node_tools.tool_build_workflow(p)
+        from unittest.mock import patch
+        from agent import plan_save
+        with patch.object(plan_save, "gaps_now", return_value=[]):
+            r = node_tools.tool_build_workflow(p)
         self.assertTrue(r["ok"])
         self.assertEqual(turnstate.of(p).build_now, {"include_proposals": None})
 
@@ -3570,7 +3751,8 @@ class ApprovedStepsAreTheContractTest(unittest.TestCase):
         from agent import steps
         p = _workflow([], pid="p_approved_steps")
         p["plan"] = {"summary": "Do.", "status": "draft", "nodes": [
-            {"id": "s1", "name": "Upload", "type": "user-input"},
+            {"id": "s1", "name": "Upload", "type": "user-input",
+             "per_run_reason": "a new file on each run"},
             {"id": "s2", "name": "Filter", "type": "code"}]}
         p["plan_approved_ts"] = 1.0
         p["approved_steps"] = steps.approved_steps_of(p["plan"])
@@ -3583,7 +3765,10 @@ class ApprovedStepsAreTheContractTest(unittest.TestCase):
         self.assertTrue(card["plan_changed"])
         self.assertEqual([x["name"] for x in card["plan_removed"]], ["Filter"])
         self.assertNotIn("plan_added", card)
-        self.assertIn("steps the user approved", node_tools.tool_build_workflow(p)["error"])
+        from unittest.mock import patch
+        from agent import plan_save
+        with patch.object(plan_save, "gaps_now", return_value=[]):
+            self.assertIn("steps the user approved", node_tools.tool_build_workflow(p)["error"])
 
     def test_a_removal_matches_by_id_and_never_a_step_the_save_lists(self):
         from agent import steps
@@ -3602,14 +3787,18 @@ class ApprovedStepsAreTheContractTest(unittest.TestCase):
         schema = next(s for s in actions.schemas() if s["name"] == "save_plan")["input_schema"]
         item = schema["properties"]["plan"]["properties"]["nodes"]["items"]
         self.assertEqual(set(item["properties"]["type"]["enum"]), steps.PORT_TYPE_NAMES)
-
-        self.assertIn("REQUIRED", schema["properties"]["plan"]["properties"]["edges"]["description"])
+        edges = schema["properties"]["plan"]["properties"]["edges"]
+        self.assertEqual(edges["type"], "array")
+        self.assertEqual(set(edges["items"]["required"]), {"src", "dst"})
+        self.assertTrue(edges["description"].strip())
 
 class ChangeDeclarationIsTheScopeTest(unittest.TestCase):
     def _built(self, pid):
         read = {"id": "n_read", "name": "Read table", "type": "connector", "read_only": True,
                 "description": "Reads the rows.", "external_impact": "reads a table",
-                "config": {"code": "write_output('rows', [{'a': 1}])", "domains": ["example.com"]}, "inputs": [],
+                "config": {"code": "n = read_input('max_rows')\nwrite_output('rows', [{'a': 1}][:n])",
+                           "domains": ["example.com"]},
+                "inputs": [{"name": "max_rows", "type": "number"}], "max_setting": "max_rows",
                 "outputs": [{"name": "rows", "type": "list"}], "tests": []}
         send = {"id": "n_send", "name": "Send requests", "type": "connector", "read_only": False,
                 "description": "Sends each row.", "external_impact": "sends requests",
@@ -3618,10 +3807,12 @@ class ChangeDeclarationIsTheScopeTest(unittest.TestCase):
                 "outputs": [{"name": "sent", "type": "list"}], "tests": []}
         p = _workflow([read, send], pid=pid)
         p["edges"] = [{"src": "n_read", "dst": "n_send"}]
+        p.setdefault("variables", []).append({"name": "max_rows", "value": 50, "persistent": True})
         node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
         def plan_step(n):
             return {k: n[k] for k in ("id", "name", "type", "read_only", "description",
-                                     "external_impact", "inputs", "outputs")} | {
+                                     "external_impact", "inputs", "outputs") + (
+                ("max_setting",) if "max_setting" in n else ())} | {
                 "code": n["config"]["code"], "domains": n["config"]["domains"]}
         p["plan"] = {"status": "built", "summary": "S", "built_ts": 1.0,
                      "nodes": [plan_step(read), plan_step(send)],
@@ -4222,8 +4413,11 @@ class ProposalFirstTest(unittest.TestCase):
         p = self._built("p_pf6")
         p["plan"]["changes"] = {"modified": ["Read the page"]}
         p["plan"]["status"] = "draft"
-        self.assertIn("hasn't seen",
-                      node_tools.tool_build_workflow(p).get("error", ""))
+        from unittest.mock import patch
+        from agent import plan_save
+        with patch.object(plan_save, "gaps_now", return_value=[]):
+            self.assertIn("hasn't seen",
+                          node_tools.tool_build_workflow(p).get("error", ""))
 
 class TheWindowIsTheAppsTest(unittest.TestCase):
     def _proj(self, pid):
@@ -4914,3 +5108,180 @@ class BenchFindingsSecondBatchTest(unittest.TestCase):
             self.assertEqual(len(seen), 2)
         finally:
             orchestrator._agent_turn, orchestrator._master_key = real_turn, real_key
+
+class TheBasicWaysOfWorkingTest(unittest.TestCase):
+    def _planned(self, pid):
+        p = _workflow([], pid=pid)
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            {"id": "parse_page", "name": "Parse the page", "type": "code",
+             "inputs": [{"name": "limit", "type": "number"}],
+             "outputs": [{"name": "rows", "type": "list"}]}]})
+        _user_approved(p)
+        return p
+
+    def test_a_try_named_by_the_steps_id_is_the_steps_try(self):
+        from agent import cells
+        p = self._planned("p_bw_id")
+        r = node_tools.tool_run_cell(p, "parse_page",
+                                     "write_output('rows', [read_input('limit')])", {"limit": 2})
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(r.get("cell"), "Parse the page")
+        self.assertIsNotNone(cells.latest_ok("p_bw_id", "Parse the page"))
+
+    def test_a_try_with_no_code_runs_the_steps_code_on_new_inputs(self):
+        p = self._planned("p_bw_rerun")
+        code = "write_output('rows', list(range(read_input('limit'))))"
+        self.assertTrue(node_tools.tool_run_cell(p, "Parse the page", code, {"limit": 1}).get("ok"))
+        r = node_tools.tool_run_cell(p, "Parse the page", "", {"limit": 2})
+        self.assertTrue(r.get("ok"), r)
+        self.assertEqual(r["output"]["rows"], [0, 1])
+        self.assertNotIn("duplicate", r)
+        self.assertIn("own code", r.get("note", ""))
+
+        self.assertTrue(node_tools.tool_run_cell(p, "Parse the page", "", {"limit": 2}).get("duplicate"))
+
+    def test_the_build_counts_a_try_made_after_the_save(self):
+        p = self._planned("p_bw_fresh")
+        self.assertIn("doesn't have any code yet", " ".join(p["plan"].get("design_gaps") or []))
+        node_tools.tool_run_cell(p, "Parse the page", "write_output('rows', [read_input('limit')])",
+                                 {"limit": 2})
+        node_tools.tool_declare_variables(p, [{"name": "limit", "value": 5}])
+        r = node_tools.tool_build_workflow(p)
+        self.assertNotIn("code yet", r.get("error", ""), r)
+        self.assertNotIn("design_gaps", p["plan"])
+
+    def test_an_ai_steps_prompt_comes_from_its_accepted_try(self):
+        from agent import cells, steps
+        cells.record("p_bw_ai", "Judge", "Say whether it fits.", {}, {"fits": True},
+                     True, 0.1, [], kind="ai", model="m")
+        nodes = [{"name": "Judge", "type": "ai", "outputs": [{"name": "fits", "type": "boolean"}]}]
+        steps.fill_from_cells("p_bw_ai", nodes)
+        self.assertEqual(nodes[0]["prompt"], "Say whether it fits.")
+
+    def test_a_blank_setting_is_not_a_stored_value(self):
+        p = _workflow([], pid="p_bw_blank")
+        p["variables"] = [{"name": "invoice_pdf", "value": "", "persistent": True}]
+        plan = {"summary": "s", "nodes": [
+            {"name": "Invoice", "type": "user-input", "per_run_reason": "a new invoice each run",
+             "outputs": [{"name": "invoice_pdf", "type": "file"}]}]}
+        found = node_tools.plan_logic.check(p, plan)["findings"]
+        self.assertFalse(any("already stores" in f for f in found), found)
+        p["variables"][0]["value"] = "blob:abc"
+        found = node_tools.plan_logic.check(p, plan)["findings"]
+        self.assertTrue(any("already stores" in f for f in found), found)
+
+class AChangeGrowsOnATryTest(unittest.TestCase):
+    def _built(self, pid):
+        p = _workflow([{"id": "n_1", "name": "Read the page", "type": "code",
+                        "config": {"code": "write_output('rows', [1])"}, "inputs": [],
+                        "outputs": [{"name": "rows", "type": "list"}], "tests": []},
+                       {"id": "n_2", "name": "Write the sheet", "type": "code",
+                        "config": {"code": "write_output('n', 1)"}, "inputs": [],
+                        "outputs": [{"name": "n", "type": "number"}], "tests": []}], pid=pid)
+        p["plan"] = {"status": "draft", "nodes": [
+            {"name": "Read the page", "type": "code", "id": "n_1",
+             "outputs": [{"name": "rows", "type": "list"}]},
+            {"name": "Write the sheet", "type": "code", "id": "n_2",
+             "outputs": [{"name": "n", "type": "number"}]}],
+            "changes": {"modified": ["n_1"]},
+            "change_note": {"found": "F.", "will_change": "W."},
+            "change_approved_ts": 1.0, "approved_changes": ["Read the page"]}
+        return p
+
+    def test_the_try_widens_the_change_and_runs_on_the_click(self):
+        from unittest.mock import patch
+        from agent import actions
+        p = self._built("p_widen")
+        def clicked(workflow, emit):
+            workflow["plan"]["approved_changes"] = sorted(
+                node_tools.steps.declared_change_names(workflow, workflow["plan"]))
+            return {"plan_shown": "approved"}
+        with patch.object(actions, "_opening_card_owned", side_effect=clicked) as card:
+            env = actions.execute(p, {"name": "run_cell", "input": {
+                "name": "Write the sheet", "code": "write_output('n', 2)",
+                "reason": "The sheet needs the new column too."}}, lambda e: None)
+        self.assertEqual(card.call_count, 1)
+        self.assertTrue(env.get("ok"), env)
+        self.assertIn("n_2", p["plan"]["changes"]["modified"])
+        self.assertIn("new column", p["plan"]["change_note"]["will_change"])
+
+    def test_without_a_page_to_ask_on_the_refusal_stands(self):
+        p = self._built("p_widen2")
+        r = node_tools.tool_run_cell(p, "Write the sheet", "write_output('n', 2)")
+        self.assertIn("not among them", r.get("error", ""))
+        self.assertEqual(r.get("widen_change"), "Write the sheet")
+
+class ProgressReportAtTheTryTest(unittest.TestCase):
+    def test_a_code_steps_dictionary_read_in_a_loop_is_not_flagged(self):
+        plan = {"summary": "s", "nodes": [
+            {"name": "Filter", "type": "code",
+             "code": "rows = read_input('rows')\nout = []\nfor r in rows:\n    out.append(r.get('amount'))\nwrite_output('kept', out)",
+             "inputs": [{"name": "rows", "type": "list"}],
+             "outputs": [{"name": "kept", "type": "list"}]}]}
+        found = node_tools.plan_logic.check(_workflow([], pid="p_hb1"), plan)["findings"]
+        self.assertFalse(any("heartbeat" in f for f in found), found)
+
+    def test_a_connector_loop_without_a_report_is_said_at_the_try(self):
+        p = _workflow([], pid="p_hb2")
+        node_tools.tool_save_intent(p, "Purpose.", instructions="Run it.")
+        node_tools.tool_save_plan(p, {"summary": "Do.", "nodes": [
+            {"name": "Fetch each", "type": "connector", "read_only": True,
+             "domains": ["api.example.com"],
+             "inputs": [{"name": "ids", "type": "list"}],
+             "outputs": [{"name": "rows", "type": "list"}]}]})
+        _user_approved(p)
+        code = ("import urllib.request\n"
+                "out = []\n"
+                "for i in read_input('ids'):\n"
+                "    out.append(urllib.request.urlopen('https://api.example.com/' + str(i)).read())\n"
+                "write_output('rows', out)")
+        r = node_tools.tool_run_cell(p, "Fetch each", code, {"ids": [1, 2]})
+        self.assertIn("heartbeat", r.get("error", ""), r)
+
+class ImportsThatNeedAnotherPackageTest(unittest.TestCase):
+    def test_googles_sign_in_transport_needs_requests(self):
+        from agent import gate
+        self.assertEqual(gate.implied_roots("import google.auth.transport.requests"), ["requests"])
+        self.assertEqual(gate.implied_roots("from google.auth.transport.requests import Request"), ["requests"])
+        self.assertEqual(gate.implied_roots("from google.oauth2 import service_account"), [])
+
+    def test_the_fix_brief_says_the_fix_has_started(self):
+        from agent import orchestrator
+        brief = orchestrator._investigate_message({"id": "tkt_1", "reason": "node threw"}, None, None)
+        self.assertIn("do not call resolve_issue", brief)
+        self.assertIn("Before you try or change any step, save the plan with fix_note", brief)
+
+    def test_the_plan_schema_carries_per_run_reason(self):
+        from agent import steps
+        props = steps.PLAN_INPUT_SCHEMA["properties"]["nodes"]["items"]["properties"]
+        self.assertIn("never an input", props["per_run_reason"]["description"])
+
+class ChangeTurnsFindWhatTheBuildUsedTest(unittest.TestCase):
+    def test_recorded_finds_a_value_a_try_was_given(self):
+        from agent import cells
+        cells.record("p_given", "Filter rows", "write_output('kept', 1)",
+                     {"expense_csv": "blob:abc"}, {"kept": 1}, True, 0.1, [])
+        pool = cells.latest_outputs("p_given")
+        self.assertEqual(pool["expense_csv"], "blob:abc")
+        self.assertEqual(pool["kept"], 1)
+
+    def test_an_output_wins_over_a_given_value_of_the_same_name(self):
+        from agent import cells
+        cells.record("p_given2", "A", "x", {"rows": [0]}, {"rows": [1]}, True, 0.1, [])
+        self.assertEqual(cells.latest_outputs("p_given2")["rows"], [1])
+
+    def test_a_read_in_an_approved_change_runs_live(self):
+        from agent import steps
+        p = _workflow([], pid="p_live_read")
+        p["plan"] = {"change_approved_ts": 1.0, "approved_changes": ["Read the sheet"]}
+        self.assertTrue(steps.in_approved_change(p, "Read the sheet"))
+        self.assertFalse(steps.in_approved_change(p, "Other step"))
+
+class RecordedReferenceInCodeTest(unittest.TestCase):
+    def test_a_recorded_reference_read_in_code_says_where_it_goes(self):
+        from runtime import capability
+        with self.assertRaises(KeyError) as cm:
+            capability._ctx["inputs"] = {}
+            capability._read_input("$recorded:page", False, False)
+        self.assertIn("in the try's inputs under a name of your own", cm.exception.args[0])

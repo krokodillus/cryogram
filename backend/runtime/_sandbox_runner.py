@@ -244,8 +244,13 @@ def _stored_captures() -> dict:
 
 # Every call the window made: folded inside the result, whole in a file of its own
 def _listed_calls(seen: dict) -> dict:
-    whole = [{"id": i, **c} for i, c in enumerate(seen["calls"])]
+    whole = []
+    for i, c in enumerate(seen["calls"]):
+        kind = capability._call_kind(c)[0]
+        whole.append({"id": i, **c, "kind": kind,
+                      **({"fetched_by": c.get("kind")} if kind != c.get("kind") else {})})
     out: dict = {"calls": capability.fold_calls(seen["calls"]),
+                 "calls_note": capability.CALLS_NOTE,
                  "calls_total": seen["total"]}
     try:
         out["calls_file"] = capability.write_file(
@@ -272,10 +277,14 @@ def _store_har() -> str:
 _NS: dict = {}
 _SECRET_VALUES: list = []
 
+# Whether the step sent any request, answered or not
+def _calls_made() -> bool:
+    return any(int(g.get("sent") or 0) for g in _CALLS["groups"].values())
+
 # The failure report: the error, what the step saw, and what it had written so far
 def _failure_payload(error: str, kind: str) -> dict:
     payload = {"ok": False, "error": error, "error_kind": kind}
-    if _CALLS["total"]:
+    if _calls_made():
         payload["calls"] = dict(_CALLS)
     try:
         saw = _saw(_NS)
@@ -312,7 +321,7 @@ def _keep_if_the_outputs_are_wrong(ports: list, out) -> None:
         return
     try:
         from runtime import port_checks
-        if not port_checks.check_ports(ports, out):
+        if not port_checks.check_ports(ports, out, require_all=True):
             return
         if not capability.window_opened():
             return
@@ -379,16 +388,8 @@ def main() -> None:
     capability.bind(inputs, profile_dir=job.get("profile_dir"),
                     blob_owner=job.get("blob_owner"))
 
-    surface = {"read_input": capability.read_input, "write_output": capability.write_output,
-               "get_secret": capability.get_secret, "ai_call": capability.ai_call,
-               "write_file": capability.write_file,
-               "heartbeat": capability.heartbeat,
-               "checkpoint": capability.checkpoint,
-               "checkpoints": capability.checkpoints,
-               "mark_sent": capability.mark_sent,
-               "browser_goto": capability.browser_goto,
-               "confirm_with_user": capability.confirm_with_user,
-               "unexpected_input": capability.unexpected_input}
+    from runtime import contracts
+    surface = contracts.surface()
     ns = dict(surface)
     global _NS, _SECRET_VALUES
     _NS, _SECRET_VALUES = ns, secret_values
@@ -408,6 +409,7 @@ def main() -> None:
         exec(code, ns)
 
         produced = capability.collected_outputs()
+        outputs_named = bool(produced)
         if produced:
             out = produced
         else:
@@ -420,6 +422,7 @@ def main() -> None:
                              else capability.read_input(name)) for name in inputs}
             result = fn(**kwargs)
             out = result if result is not None else capability.collected_outputs()
+            outputs_named = result is None
 
         if ns.get("page") is not None:
             try:
@@ -435,7 +438,8 @@ def main() -> None:
             if cap:
                 out["$capture"] = cap
         body = json.dumps({"ok": True, "output": capability.scrub_value(out, secret_values),
-                           **({"calls": dict(_CALLS)} if _CALLS["total"] else {})},
+                           "outputs_named": outputs_named,
+                           **({"calls": dict(_CALLS)} if _calls_made() else {})},
                           default=str)
     except Exception as e:
         stack.close()

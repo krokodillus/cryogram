@@ -1,57 +1,61 @@
 ---
 name: google-sheets
-description: WHEN a workflow step needs to read from or write to a Google Sheet - the proven connection routes, the exact user setup steps and the known gotchas, so you never rediscover them live
+description: WHEN a step reads or writes a Google Sheet: how to choose between an Apps Script web app, the Sheets API with a service account, and the CSV export link
 tier: 2
 kind: action
 depends_on: []
-version: 1.6.0
-last_updated: 2026-09-10
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # Connecting to Google Sheets
 
-Three proven routes. Present the viable ones to the user with one-line trade-offs, your recommendation first, and let them pick before you set anything up.
+Use a connection that already exists, or the route the user chose. Compare routes only when more than one of them works and they really differ in setup, in what the step can do, or in how much of the user's data they share. Do not make the user choose between all three routes for every Sheets task.
 
-First, check the workflow's attached environments for an existing Google service-account key. If one is there, lead with Route 2 using it; never walk the user through Apps Script setup while a working credential sits unused. If none exists, include the reuse angle whenever you present the fork: a user who will build more Google automations, or already has a service account, sets it up once, saves the JSON key in an environment, and every future workflow reuses it without re-entering. Recommending Apps Script for a one-off stays right; the reuse angle is what must never be left out.
+First check the environments attached to the workflow for a Google service-account key. If one is there, offer Route 2 with it first, and do not walk the user through Apps Script setup while a working key sits unused. If there is none, always tell the user about the reuse option when you offer the choice: a user who will build more Google automations, or who already has a service account, sets it up once, saves the JSON key in an environment, and every later workflow uses it without entering it again. Recommending Apps Script for a one-off is still right, but always mention the reuse option.
 
 ## Route 1: an Apps Script web app, recommended for writes at small scale
 
-Free, no API key, no cloud console: the sheet carries a tiny script you POST to. The setup is on the user's side, so give them these steps complete, and put the script in a fenced code block of its own so the copy box carries exactly the code:
+It is free and needs no API key and no cloud console: the sheet carries a small script that your step sends a POST request to. The setup happens on the user's side, so give them these steps in full, and put the script in a fenced code block of its own so the copy box holds exactly the code:
 
 1. Open https://sheets.new (or the existing sheet).
 2. Add the header row the workflow expects.
-3. Extensions, Apps Script; delete anything in the editor and paste the `doPost(e)` handler you write for the task (parse `e.postData.contents`, `sheet.appendRow(...)`, return JSON through ContentService).
-4. Deploy, New deployment, type "Web app"; Execute as: Me; Who has access: "Anyone", exactly that wording, not "Anyone with Google account", which returns Google's login page to your POST.
-5. Deploy, approve the authorisation prompt, copy the Web app URL.
+3. Click Extensions, then Apps Script. Look at the existing project first. Keep its scripts, triggers and deployments, and do not overwrite an existing doPost without first talking with the user about who relies on it. The handler checks a shared secret against Script Properties before it writes to the intended sheet, then returns an explicit JSON result saying what happened. Collect the matching secret for the caller through the masked ask; never write it in the prompt or in example code.
+4. Click Deploy, then New deployment, and choose the type "Web app". Set Execute as: Me. Set Who has access: "Anyone", in exactly that wording. Do not choose "Anyone with Google account": Google then answers your POST with its login page.
+5. Click Deploy, approve the authorisation prompt, and copy the Web app URL.
 
-What goes wrong, to check before debugging anything else:
+What goes wrong, to check before you debug anything else:
 
-- The URL must be the deployed Web app URL ending in `/exec`, never the editor or preview link. A login or consent HTML page in the response means the access setting or the URL is wrong.
-- Editing the script does not update the deployment: Deploy, Manage deployments, the pencil, Version "New version", Deploy, every time.
-- Google redirects the response through script.googleusercontent.com, so the step's domains need script.google.com and script.googleusercontent.com.
-- The web app URL grants write access to that sheet: treat it as a secret, collected through the masked ask and stored by name.
+- The URL must be the deployed Web app URL ending in `/exec`, never the editor link or the preview link. If the response is a login or consent page in HTML, the access setting or the URL is wrong.
+- Editing the script does not update the deployment. Every time, click Deploy, Manage deployments, the pencil, set Version to "New version", and click Deploy.
+- Google redirects the response through script.googleusercontent.com, so the step's `domains` must include script.google.com and script.googleusercontent.com.
+- A deployment open to Anyone can be called by anyone. Keep the endpoint private and make the handler check the shared secret before it does anything; a URL that is hard to guess is not enough to protect it. Store the endpoint and the token, each under its own name.
 
 ## Route 2: the Google Sheets API with a service account, for reads at scale and robust writes
 
-The official API, with structured errors and no redirect quirks, but the user must create a Google Cloud project (or reuse the one they made for another workflow), enable the Sheets API, create a service-account key (JSON, stored as a secret) and share the sheet with the service account's email. Right when the workflow is business-critical or needs reads and writes; heavy for a casual sheet, but it reuses: once the key sits in an environment, every later Google workflow rides it with zero setup.
+This is the official API. It gives structured errors and has no redirect problems. The user must create a Google Cloud project (or use the one they made for another workflow), enable the Sheets API, create a service-account key (a JSON file, stored as a secret), and share the sheet with the service account's email address. Use it when the workflow is business-critical or needs both reads and writes. It is a lot of setup for a casual sheet, but it can be reused: once the key is in an environment, every later Google workflow uses it with no setup.
 
-A service account can never create a spreadsheet: a sheet is a Drive file and service accounts have no storage quota (the same wall as the drive guide), so creating the sheet automatically is impossible on this route; never offer it. A "permission denied" on create is this wall, not a missing API enable, so do not send the user to enable APIs for it. The sheet must exist first: the user opens https://sheets.new, names it, shares it with the service account's email as Editor, and pastes the link back. The workflow then writes to that sheet every run.
+A service account has no storage quota in a personal My Drive, so it cannot create files there: use a sheet the user already owns and share it with the service account as Editor. This does not mean a service account can never create a file. In a Workspace shared drive that the account has permission for, it can create files that the shared drive owns. Before you offer that route, check the destination and the API call that creates the file. If you get a 403, work out the cause from the actual response, and do not assume it is always the quota.
 
-The service account's email: nobody can read it out of the stored key, not the user (a secret is never shown again) and not you (the value exists only inside a running step). Capture it as its own non-secret variable at setup, while the user still has the JSON in hand. For an existing stored key with no such variable, the email is visible without the file at https://console.cloud.google.com/iam-admin/serviceaccounts; ask the user to read it there, then save it so it is never asked again.
+Nobody can read the service account's email address out of the stored key: not the user (a secret is never shown again) and not you (the value exists only inside a running step). During setup, while the user still has the JSON file, save the email address as its own setting that is not a secret. If a key is already stored with no such setting, the email address is shown, without the file, at https://console.cloud.google.com/iam-admin/serviceaccounts. Ask the user to read it there, then save it yourself, so it is never asked again.
 
-- Python: the `google-auth` package for a bearer token, then plain REST against `sheets.googleapis.com/v4/spreadsheets/<id>/...`.
-- The domains are oauth2.googleapis.com (the token POST), sheets.googleapis.com and www.googleapis.com. Declare all of them up front or the first token fetch dies egress-blocked.
+- Python: use the `google-auth` package to get a bearer token, then plain REST calls to `sheets.googleapis.com/v4/spreadsheets/<id>/...`.
+- The domains are oauth2.googleapis.com (the token POST), sheets.googleapis.com and www.googleapis.com. Declare all three from the start, or the first token request is stopped as egress-blocked.
 
-If company IT blocks it: Workspace admins can disable Apps Script or external sharing, and then the Deploy step errors or "Anyone" is missing from the access options. The one-line ask for IT: please allow Apps Script web-app deployments for my account. Or fall back to Route 2, which IT often prefers anyway.
+If the company's IT department blocks it: Workspace admins can switch off Apps Script or external sharing, and then the Deploy step gives an error, or "Anyone" is missing from the access options. The one-line request for IT is: please allow Apps Script web-app deployments for my account. Or use Route 2, which IT often prefers anyway.
 
 ## Rows by key, columns by header, on every route
 
-Users sort, insert and delete rows between runs, and add columns. Read the header row once per run and build a map from header name to index; every column the step touches is looked up by name from that map, and a column that is not there is an `unexpected_input` naming what the sheet has and what the step needs, never a hardcoded letter or index and never a column-position setting. A row is identified by a key value in it (the profile URL, the email, an id column), never its row number, and the bookkeeping of what is already done (checkpoints, a done-list) keys on that value. A write-back (a timestamp, a status, a message) re-reads the sheet at write time, finds the row by key, computes the A1 range from the header map then, and writes; row numbers exist only inside that one call. Prefer writing all the values of one row in one call (a `values:update` of the row's range) over several passes over the same row.
+Users sort, insert and delete rows between runs, and add columns. Read the header row once per run and build a map from each header name to its column index. Look up every column the step uses by name in that map. If a column is missing, raise `unexpected_input` naming the columns the sheet has and the columns the step needs. Never write a column letter or index in the code, and never make the column position a setting. Identify a row by a key value in it (the profile URL, the email, an id column), never by its row number, and track what is already done (checkpoints, a list of done items) by that key value. To write back (a timestamp, a status, a message), read the sheet again at the moment you write, find the row by its key, work out the A1 range from the header map then, and write. Row numbers exist only inside that one call. When you write several values to one row, prefer writing them all in one call (a `values:update` of the row's range) to going over the row several times.
 
-## Route 3: the CSV export URL, read-only, zero setup
+## Values read back are text
 
-A sheet shared "Anyone with the link" reads as CSV at `https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>`. No auth, one fetch. Only for data the user is happy to make link-public.
+On every route, cells come back as text by default: a number as "240", a tick box or a written true or false as "TRUE" or "False", a date as the sheet shows it. When a step reads rows back, including rows the workflow wrote in an earlier run, convert each value to the type its output declares, in the code that reads it, so that a row read from the sheet matches a row the step builds itself. On the Sheets API, `valueRenderOption=UNFORMATTED_VALUE` returns numbers and true or false as real numbers and booleans. Text and dates still need the step's own conversion.
+
+## Route 3: the CSV export URL, read-only, no setup
+
+A sheet shared as "Anyone with the link" can be read as CSV at `https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>`. It needs no login and one request. Use it only for data the user is happy to make public to anyone with the link.
 
 ## Official docs
 
-Check here if a route fails: https://developers.google.com/workspace/sheets/api
+If a route fails, check here: https://developers.google.com/workspace/sheets/api

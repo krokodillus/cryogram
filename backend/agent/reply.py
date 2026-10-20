@@ -74,6 +74,10 @@ def land(workflow: dict, entry: dict) -> tuple[str, list]:
                                       cid=entry["cid"])
 
         steps.settle_open_asks(workflow)
+        if req is not None and (req.get("payload") or {}).get("holds") == "person":
+            drive = ""
+            if entry["text"] in ("allow", "always"):
+                timed_out(workflow, req)
     else:
         text = entry["text"]
 
@@ -105,6 +109,23 @@ def land(workflow: dict, entry: dict) -> tuple[str, list]:
     items = [i for i in transcript.items(workflow)
              if int(i.get("seq") or 0) > seq0]
     return drive, items
+
+TIMED_OUT = "Sorry, that question timed out and the window closed."
+
+# A late answer to a task in a window that has closed: say so, and ask if they are ready to try again
+def timed_out(workflow: dict, req: dict) -> None:
+    from agent import actions
+    pl = req.get("payload") or {}
+    step = str(pl.get("step") or "")
+    transcript.append_message(workflow, "assistant", TIMED_OUT)
+    transcript.append_request(workflow, "approval", {
+        "title": (f'Are you ready to try "{step}" again now?' if step
+                  else "Are you ready to try again now?"),
+        "detail": str(pl.get("detail") or ""),
+        "scope": actions.WINDOW_NEEDS_YOU,
+        **({"step": step} if step else {}),
+        **({"step_id": pl["step_id"]} if pl.get("step_id") else {}),
+        "holds": "ready"})
 
 # Which option a typed reply IS: exact text of one of the card's options, else none
 def option_match(req: dict, text: str):
@@ -156,7 +177,7 @@ def settle(workflow: dict, req: dict, got, at_rest: bool = False) -> dict:
         elif payload.get("fields") and isinstance(raw, dict):
             shown = steps.clean_ask_answers(workflow, payload["fields"], raw)
         else:
-            shown = str(text)[:200]
+            shown = str(text)
         if kind == "blueprint" and payload.get("head") != "built":
             plan = workflow.get("plan") or {}
             if payload.get("fix"):
@@ -172,12 +193,17 @@ def settle(workflow: dict, req: dict, got, at_rest: bool = False) -> dict:
             else:
                 workflow["plan_approved_ts"] = time.time()
 
+                plan.pop("change_note", None)
+
                 workflow["approved_steps"] = steps.approved_steps_of(plan)
-        if kind == "approval" and text in ("allow", "always") and at_rest:
+        if kind == "approval" and text in ("allow", "always") and at_rest \
+                and payload.get("holds") != "person":
             grants = workflow.setdefault("approval_grants", [])
             grant = {"step": payload.get("step") or "",
                      "title": payload.get("title") or "",
                      "ts": time.time()}
+            if payload.get("holds") == "ready":
+                grant["kind"] = "ready"
             if text == "always" and payload.get("holds"):
                 grant.update({"kind": payload["holds"], "always": True,
                               **({"domain": payload["domain"]} if payload.get("domain") else {})})

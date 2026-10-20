@@ -8,6 +8,8 @@ While building, Cryogram asks before opening a browser window, sending something
 
 For a browser step that only reads, **Yes, and don't ask again for <site>** allows later windows on that site until the build finishes. A step that sends through the browser asks for every window. **Yes, and don't ask again for this step** skips further send questions for that step until the build finishes.
 
+When a step reads a list from a website, Cryogram checks how many items were found; if it’s fewer than the most it was allowed, it asks you whether that’s about the number you expect, so a list that didn't fully load is caught during the build.
+
 Choosing **No** to a send or browser window still lets the step be built, but it is not tried for real again during the build. The first run is then its first real attempt.
 
-**Here's what I built** tells you when it is ready. To stop building, use the **Stop** button beside **Send**, or type a message to stop the current work and tell Cryogram what to do next.
+**Done - built and checked** tells you when it is ready. To stop building, use the **Stop** button beside **Send**, or type a message to stop the current work and tell Cryogram what to do next.

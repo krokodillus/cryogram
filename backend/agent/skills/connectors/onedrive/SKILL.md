@@ -1,49 +1,49 @@
 ---
 name: onedrive
-description: WHEN a workflow step needs to read a file from or save a file into OneDrive (personal or work/school) - the no-admin routes, the Power Automate bridge for writes, share-link reads, and the gotchas
+description: WHEN a step reads or writes files in OneDrive: private access that is already authorised, a Power Automate bridge flow for writes, or a share link for reads
 tier: 2
 kind: action
 depends_on: []
-version: 1.1.0
-last_updated: 2026-09-06
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # OneDrive files
 
-No public no-auth upload API exists, and Graph app registration is an IT workflow, so the routes split by direction. One question decides: does the workflow need to read a file from OneDrive, save files into it, or both?
+Use the direction the user asked for (read or write) without asking again. Reuse access that is already authorised if it suits the task. A Power Automate write bridge needs a work/school account that owns the flow, and tenant access to the connectors it needs. Managing cloud flows with a personal account ended in July 2025, so a personal OneDrive account alone is not enough. Check these before you give setup steps.
 
-## Writes: the locked-in route is a Power Automate bridge flow
+## Writes: a Power Automate bridge flow, when no suitable connection exists
 
-The free "When a Teams webhook request is received" trigger (a standard connector; the plain HTTP trigger is premium) drives OneDrive actions. User setup, clickable:
+The free trigger "When a Teams webhook request is received" is a standard connector (the plain HTTP trigger is premium), and it can drive OneDrive actions. Give the user these steps, with links they can click:
 
-1. https://make.powerautomate.com, Create, Instant cloud flow, the trigger "When a Teams webhook request is received" (Who can trigger: Anyone).
-2. Add the action "Create file" (OneDrive for Business, or OneDrive for a personal account): pick the folder; File Name from the trigger body (triggerBody()?['name']); File Content as base64ToBinary(triggerBody()?['content_b64']).
-3. Save; copy the trigger's HTTP URL and collect it through the masked ask. The URL is the credential.
+1. Go to https://make.powerautomate.com and choose Create, then Instant cloud flow, then the trigger "When a Teams webhook request is received" (Who can trigger: Anyone).
+2. Add the action "Create file" (OneDrive for Business, or OneDrive for a personal account). Pick the folder. Set File Name from the trigger body (triggerBody()?['name']) and File Content to base64ToBinary(triggerBody()?['content_b64']).
+3. Save the flow, copy the HTTP URL of the trigger and ask the user for it with the masked ask. The URL is the only credential, so treat it as a secret.
 
-The send pattern: POST JSON {"name": "...", "content_b64": "..."}; timeout=30; retry timeouts, 5xx and 429 only; success is a 202 with an empty body. The flow is fire-and-forget and cannot return data to the caller, so it serves writes, never reads. Keep payloads modest (megabytes, not hundreds); base64 grows content by about 35 percent.
+POST JSON with `name` and `content_b64`, an explicit timeout and one attempt. A 202 means only that the trigger accepted the request, not that the file was created. During testing, check the downstream action in the flow's run history, or read the file back with access that is already authorised, before you say the file exists. If the outcome is unclear, find out what happened before you retry. This template sends and does not wait for a result, which is enough for writes. Do not assume its limits apply to every flow you might build. Base64 makes the payload about a third bigger, so check the size limits.
 
-## Reads: a share link, proven live
+## Reads: a share link, tested live
 
-A file or folder shared "Anyone with the link" downloads without auth, but the URL shape varies by account type and Microsoft has changed link formats, so always prove the exact link in a cell before planning around it.
+Use a link that is public to anyone only if the user agrees to that exposure. Prefer private access that is already authorised if there is any. URL shapes differ, so check the actual response in a cell before you rely on a download link. Do not assume a link to a folder is a link to one file.
 
-- Personal (1drv.ms or onedrive.live.com): append `&download=1` (or `?download=1` if there is no query yet) to the shared URL; it follows redirects to the bytes.
-- Work or school (contoso-my.sharepoint.com/...): append `?download=1`.
-- The older api.onedrive.com/v1.0/shares/u!{base64url}/root/content trick is unreliable now (auth errors on new-format links); do not reach for it first.
-- The redirect chain crosses hosts: declare the link's host and *.sharepoint.com and onedrive.live.com in `domains`, and expect 302s with redirects followed.
-- A response that is HTML (a login page) instead of bytes means the share is not truly "Anyone with the link": fix the share, never scrape the page.
+- Personal accounts (1drv.ms or onedrive.live.com): add `&download=1` to the shared URL, or `?download=1` if the URL has no query yet. The URL then follows redirects to the file's bytes.
+- Work or school accounts (contoso-my.sharepoint.com/...): add `?download=1`.
+- The older api.onedrive.com/v1.0/shares/u!{base64url}/root/content trick is unreliable now (it gives auth errors on links in the new format). Do not try it first.
+- The redirects pass through several hosts. List the share link's exact host, and every redirect host you saw, in `domains`, for example the tenant's `contoso-my.sharepoint.com` host. Wildcards such as `*.sharepoint.com` are not valid. If a redirect is newly blocked, it goes through the normal approval card. Never widen access on a guess.
+- A response that is a login or consent HTML page is not file data. Look at the access settings and the redirects to find out why. Do not make a private share public on your own to fix it.
 
-If both directions are needed: a share-link read and a bridge-flow write, two steps, one guide.
+If the task needs both directions, use two steps: a read from a share link, and a write through the bridge flow. This one guide covers both.
 
 ## What goes wrong
 
-- The bridge flow dies silently if it is turned off or its owner leaves. Check the flow's run history (make.powerautomate.com, My flows, the latest run) before guessing; it names the failing action.
-- "Create file" overwrites nothing by default: the same name is an error unless the flow adds a timestamp. Suggest a name with a timestamp in the flow, or send unique names.
-- Personal accounts use the "OneDrive" connector and work accounts "OneDrive for Business"; the flow must match where the folder actually lives.
+- The bridge flow stops without any message if it is turned off or its owner leaves. Check the flow's run history first (make.powerautomate.com, My flows, the latest run). It names the action that failed.
+- The "Create file" action does not overwrite by default. A file with the same name gives an error, unless the flow adds a timestamp to the name. Suggest adding a timestamp in the flow, or send a unique name each time.
+- Personal accounts use the "OneDrive" connector and work accounts use "OneDrive for Business". The flow must use the one that matches where the folder is.
 
 ## If company IT blocks it
 
-When Power Automate is disabled or sharing is restricted, the one-line ask for IT: please allow me an instant cloud flow with the Teams webhook trigger writing to my own OneDrive folder. If external sharing is the block, ask for a single "Anyone with the link" exception for one folder. Graph app registration is the IT-grade alternative; say so plainly rather than walking a non-admin through admin consent.
+If Power Automate is disabled or sharing is restricted, give the user this one line to send to IT: please allow me an instant cloud flow with the Teams webhook trigger writing to my own OneDrive folder. If external sharing is what blocks it, ask for one "Anyone with the link" exception for one folder. Registering an app for Microsoft Graph is the alternative, and IT does that. Tell the user so plainly, and do not walk a user who is not an admin through admin consent.
 
 ## Official docs
 
-Check here if a route fails: https://support.microsoft.com/en-us/office/share-onedrive-files-and-folders-9fcc2f7d-de0c-4cec-93b0-a82024800c07
+If a route fails, check here: https://support.microsoft.com/en-us/office/share-onedrive-files-and-folders-9fcc2f7d-de0c-4cec-93b0-a82024800c07

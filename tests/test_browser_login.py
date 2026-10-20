@@ -70,9 +70,11 @@ class SigningInIsTheStepsOwnTest(unittest.TestCase):
     def test_no_sign_in_helper_on_the_surface(self):
         self.assertFalse(hasattr(capability, "browser_login"))
         self.assertNotIn("browser_login", gate.RESERVED_NAMES)
-        src = open(_sandbox_runner.__file__).read()
-        self.assertNotIn('"browser_login"', src)
-        self.assertIn('"confirm_with_user": capability.confirm_with_user', src)
+
+        from runtime import contracts
+        surface = contracts.surface()
+        self.assertNotIn("browser_login", surface)
+        self.assertIs(surface.get("confirm_with_user"), capability.confirm_with_user)
 
     def test_the_finder_names_a_real_browser_or_none(self):
         exe = capability.browser_executable()

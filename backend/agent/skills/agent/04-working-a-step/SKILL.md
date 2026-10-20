@@ -1,83 +1,47 @@
 ---
 name: 04-working-a-step
-description: Doing each step for real as a cell on the real sample - what a cell may and may not do, probing without waste, leaving working code alone, opening a browser window, and testing a step that sends something for real
+description: How to try each step for real, reuse what earlier tries saved, and keep test values apart from saved settings
 tier: 2
 kind: policy
 depends_on: []
-version: 4.4.0
-last_updated: 2026-09-15
+version: 5.1.0
+last_updated: 2026-10-14
 ---
 
-# Working a step
+# Working on a step
 
-Do the task yourself on the real sample, and work each real step as a cell named after that step. The run is recorded (the code, its inputs and its output; that recording is the step's evidence), and a step of the same name carries that code and that recording as its first test when you save the plan.
+Try each code, connector and browser step of the plan with `run_cell`, giving the try the step's own name. The try's code, inputs and accepted outputs become the step's code and first test when the workflow is built. Try an AI step with `run_ai_step`. A try that only looks at something, and is not one of the plan's steps, gets a different name that says what it looks at, and a one-sentence `reason`, so it never replaces a step's recorded try.
 
-A try is judged exactly as a run is. Before the code runs, the step's inputs are checked against the types its plan step declares, so a setting stored as text where a number is declared fails the try with the same sentence a run would give; afterwards the outputs are checked the same way, so a value that came back empty or in another shape fails the try too. A failed try is kept as one. When a value is the wrong type, the fix is at the port or at the setting that owns it, never a conversion written into the step that reads it. When an output may genuinely be empty some runs, say so on the port; when it should not be, make the step produce it.
+A step's inputs and outputs are checked against their declared types. When a value has the wrong type, fix it at the declared input or output type, or at the stored setting. Do not convert it in the code of the step that reads it. Mark an output optional only when the value can really be missing, for example a person with no profile photo. Never mark it optional to get past a failed check. A step that reads data from outside may convert it from the form the source documents into the declared type.
 
-Everything you do while working a step must be something you could write as code afterwards. That is the point: a step worked out as a cell repeats by construction, because the run executes the same code in the same place. Anything done by hand or by clicking about proves nothing and can never become a step. Prefer a command or an API to anything interactive, and read a recording of the network traffic to find the call behind the clicks.
+## Work in small, repeatable tries
 
-Look at the sample first, form the smallest hypothesis you can, and test it by doing it rather than reasoning about it. The cell is your computer here, so run the parse, call the API, fetch the page.
+Look at the sample first. Decide what you do not know yet, and run the smallest try that answers it. A try that reads from outside, or sends something the user approved, uses a small sample that is typical of the real data, usually one or two items. A step that only transforms data on this computer may use all of its input. When a step has a maximum setting, pass a smaller number in the try's inputs, and leave the stored setting as it is.
 
-While building, work a step that loops over items on a sample of 2, unless there is a reason to use more, and say the reason. The sample goes in through the step's maximum setting, passed as 2 in the cell's inputs; the step's code reads that setting and never cuts the list to a number itself, so the built step works through as many items as the setting allows.
+A browser step that reads a list from one page is tried on what the page shows first plus one more batch of what it loads on scrolling, by passing a maximum just above the number of items the page shows before scrolling. A step that works through several items is tried on 1 item first, and then on 2 to check the loop. The browser guide says more about both.
 
-Load the connector guide for an outside tool before searching the web, and search only for what the guide does not answer. The guide carries the routes that work, the exact setup steps for the user, and the traps. A website that answers a plain fetch with a refusal or a bot check has a guide too, the browser one.
+Use the current guide for the service before you search the web, and load it if it was not given to you. Search the service's official documentation for details the guide does not have, that look out of date, or that do not match what you see. Load the browser guide only for a browser route the user agreed to, never to get round a refusal.
 
-Two rows, posts or pages is the standard while working a step, passed explicitly rather than by using the workflow's real cap. One pass along the path where everything goes right, and then build. Volume and the awkward cases belong to real runs.
+A try is judged exactly as a run is: its inputs and outputs pass the run's own checks. Read inputs by their names from the first try. A step's purpose decides its declared outputs and their types, and the code exists to produce them. So write the `write_output` lines first, one for each declared output, with exactly its name and in its declared type, and then write the code that fills them. Keep values you only want to look at out of the declared outputs: extra keys never become part of an output. A file the step makes is written with `write_file`, and its reference goes on a file output; check what is in the file, not only that it exists. Keep secrets, and sample data that has nothing to do with the output, out of every output. In a connector or browser step, a loop that waits on a page or a service calls `heartbeat()` on every round, or a run stops it for looking stuck; a try whose loop has none is refused with the rest of the code check.
 
-## What a cell's code may do
+You can send several tries that do not depend on each other in one call. Never send something real to a service in the same call as tries that only look at things. A step the user approved to send one thing per item is one step with that purpose, not permission to send anything else. Reuse samples, recordings and the guides you already have in full. Read something again only when part of it is missing, was cut short, or has changed. Never fetch a page again only to read it a different way: read the saved copy.
 
-A cell reads its values by name from the first attempt, named exactly as the plan step's inputs. Never write a value into the code meaning to swap it for a real input later: the swap changes the code, which throws away the test and makes the step run for real again.
+Give every wait an end, and stop as soon as the result answers your question. Read the workflow's models, samples and current plan from what the app already gave you; do not run a try to find them out.
 
-Step code speaks a fixed set of calls: read an input, write an output, get a secret, record a checkpoint, and write a file. Writing a file hands back a reference, and it is that reference a file-typed output carries; plain text on a file port never becomes something the user can download.
+## Changes, and what needs a new try
 
-Step code can never talk to the user. A saved workflow runs with no chat and no model, and the product owns every pause a run has: the approval in front of a write, a step that asks the user for a value, the form when a value is missing. Code that wants to ask the user something in the middle is designed wrongly, because the moment it wants already exists as a step.
+Keep code that works when what it does does not need to change. A change to a step's code, prompt, model or inputs and outputs needs a new try of that step, as its guide says. Reading the changed code yourself is never a replacement for that try. If you only renamed something, or only changed where a value comes from, you do not need to try the step again for real, as long as the app still accepts its earlier try. When the app says a step's earlier try no longer counts, believe it.
 
-Switching approach inside a step is invisible to the user, so just do it. If the switch changes what the workflow does, how robust it is, or what the user has to set up, ask about that one step, your recommendation first; the rest of the plan stands. Reshaping a step the user has already accepted, such as splitting it, changes what they agreed to, so say what you saw and ask, in the same turn, before rebuilding it (07 says why a step is never split into copies of itself).
+Test code that only transforms data on this computer with tries that open nothing outside. For a connector or browser step, check the shape of its data against what earlier tries saved, or with rehearsal where the app supports it, never by sending or fetching again for real. If you really need another real try, say why, and it gets its normal approval card. Never sign the user out, or cause an error on a service, in a way that breaks something, to see what happens.
 
-A change that only moves where a value comes from, such as a per-run question becoming a stored setting, is a value declaration, a dropped step and an amended save. No code changes and nothing is tested again, because the input finds the value by name. Test again only a step whose code truly changed, once and on its own: never the whole chain, and never a browser window for steps you did not touch.
+A saved workflow does not include you. When a run needs a judgement or a value from the user, use an AI step or a user-input step; never build a chat into a step. A browser step asks the user to act in the window with `confirm_with_user`, as the browser guide describes.
 
-## Probing without waste
+## Sending for real, and browser windows
 
-A probe is a cell that only looks, to answer a question of yours. One cell per question, never one per fact: a probe can look at several things and write one labelled result. Each extra call costs about twenty-five seconds, so keep a probe you know is slow on its own call, and never put anything with an outside effect in a batch: a write always stands alone and says plainly what it does.
+A real test send uses the smallest data that shows the send works, to the destination the user agreed, and data that can be thrown away afterwards. The approval card is the question: never ask the user beforehand whether you may try it. Say in the try's `reason` exactly what it will send. Deleting the test data afterwards is another change on the service, which needs its own approval: never delete a test row by yourself.
 
-A probe carries a plain name saying what it checks, never the name of a plan step, because a cell named after a step becomes that step's own test. Every probe passes a one-sentence reason, which is the line the user watches, so a detour reads as purposeful work rather than as poking about.
+When the user says no to a test send, or a send cannot safely be made to happen during the build, follow the connector guide's reference "61-connector-practice/unproven-steps". The step can stay untried, with complete code and tests you wrote, and must never be recorded as passed. Everything else the build needs still applies.
 
-The same economy holds for your own reads. The calls that orient you at the start of a turn go in one round together, never one per round. Your context already carries the workflow's outline and every write hands back the updated state, so read a step again only when a result surprises you, and read an uploaded document again only when you need its contents, never to reorient. Never use a cell or a model call to find out something your context already tells you, such as which models are set up or which samples are stored. To see what a built workflow would do, where it pauses and where each value comes from, walk it yourself rather than asking the user what their screen showed.
+When you are not sure whether a send arrived, never send it again to find out. Look at what earlier tries saved, or check on the service first. Only an operation you have checked is safe to repeat may use the connector guide's retry rules.
 
-Reads that do not depend on each other (a step, the step list, recorded cases, samples, a guide) go as several calls in one response, never one per round, because every response is a round trip the user waits through and everything already said is read again on every later one. Your most recent turns are replayed in full at the start of each turn, so a guide, a step or a recording read there needs no second look. Never re-type what you already have: a cell's code and its recorded run belong to the step by themselves, so a save never carries code or tests for a step a cell ran, and a re-save is an amendment carrying only the steps that changed.
-
-A cell blocked from reaching an address raises the question with the user by itself, and when the answer comes back the cell runs again. Never route around a blocked cell, because the step has to work through the connection it will really use.
-
-Nothing spins with nothing showing. Every wait has a bound, and the bound ends in a plain message or a question to the user; a step may wait on the user, never past them.
-
-Samples can hold real personal or commercial data. It stays where the work happens, and reaches the chat only as far as the user needs it to judge the result.
-
-## Code that already works
-
-A remark about the style of code that already ran is information and never a reason to rewrite it. Rewriting throws away the recorded run, puts the step back through the test, and for a browser step costs the user another sign-in. Rewrite code that already works only when its behaviour has to change, and then extend what is there, by wrapping it or adding the branch, rather than writing the step again; what is genuinely new is the few lines that are new.
-
-Never run something again to check what the code plainly makes true: an output's field names, a renamed input, a line you removed. Reading the text tells you, and for a send or a window the extra run costs a real action.
-
-When your own change forces a step the user watched pass to be tested again, say so in one line before you run it.
-
-A step whose trigger you cannot reproduce right now, such as the signed-out branch while the session is signed in, is untested on purpose. Say so plainly, keep its code and a written test on the plan, and let its first real run be the test. Never force the condition destructively and never loop trying to make it happen.
-
-## Opening a browser window
-
-The first window for a step asks the user, and every launch says why it is opening. A yes covers that window; for a step that only reads, the user can also say yes for every window on that site until the build is done, and a step declared as sending asks for every window. Any action that needs the user at their machine gets a question immediately before it happens, every time, even when they agreed to the route earlier.
-
-Working out a page usually takes more than one window: whether scrolling loads more, how the next page of a list is fetched, what a call needs to be accepted. Open another window when the next question needs the live page, after reading what the earlier windows kept, and say in `reason` what this window is for. Each window's recording is numbered and kept beside that reason for the rest of the build, so compare windows (`"$recorded:har#2"` against `"$recorded:har#3"`) rather than opening the page again for something one of them already shows.
-
-Plan the pages a phase of the work needs and visit them in the same window where you can, because each launch is another signal to the site's bot detection and, on a site the user is signed in to, a risk to the session. The main step's own cell does that step's real job in the shape it will keep and captures the raw pages every other step needs, so the rest work from the recordings with no window at all. Where several methods might work, try them in the same window and keep each capture.
-
-On a site the user is signed in to, opening a page is an action other people may see, because the site records it. Visit as few pages as answer the question, read the recorded page again rather than fetching it a second time, and never look around the site to test an idea without first telling the user what you will open and why.
-
-## Sending something for real
-
-A step that has an effect in the world is tested by one real send with a small throwaway payload, never by pushing the full output into live data. Run the cell and let the approval question ask: never ask the user beforehand whether you may test it, and never ask for a blanket yes. The one-line reason you pass with the cell is what they read; its summary says what the action really does, and you never split an action into pieces to make it look harmless.
-
-A no settles that step: say so once, in one line, and build. The first real run performs the send behind its own approval.
-
-A step added deep into a built workflow, which only a real run can feed, is never tested with a row you invented. Either one throwaway send now, if the user says yes, or nothing now and the first real run tries it; if that run stops there, the repair works on the run's own data until it passes (08).
-
-A write is one attempt. Once a send has fired, or you do not know whether it fired, it is never fired again to work out what happened. Work that out from what was recorded and from what the user can see.
+For browser work, follow the browser guide on windows, checking the page, the saved files and how many items to collect. The app opens and closes the window. The user agreeing to a route does not replace the card before a window opens or before a step changes something outside.

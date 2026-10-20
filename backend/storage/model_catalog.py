@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 PROVIDERS: dict[str, dict] = {
@@ -15,6 +16,29 @@ PROVIDERS: dict[str, dict] = {
     "codex":      {"adapter": "compatible", "reads": []},
     "compatible": {"adapter": "compatible", "reads": []},
 }
+
+KNOWN_REFUSALS: list[tuple] = [
+    (re.compile(r"^(?:models/)?gemini-(\d+)(?:\.(\d+))?"), (3, 6), ("temperature",)),
+    (re.compile(r"^claude-(?:sonnet|opus|fable|mythos)-(\d+)"), (5, 0), ("temperature",)),
+    (re.compile(r"^gpt-(\d+)(?:\.(\d+))?"), (5, 0), ("temperature",)),
+]
+
+# The settings a model takes none of: the known rows for its name, then what its provider row learned
+def refuses(provider: dict, model: str) -> list:
+    out: list = []
+    for pattern, since, settings in KNOWN_REFUSALS:
+        m = pattern.match(str(model or "").lower())
+        if not m:
+            continue
+        minor = m.group(2) if pattern.groups >= 2 else None
+        if (int(m.group(1)), int(minor or 0)) >= since:
+            out += [s for s in settings if s not in out]
+    row = next((m for m in (provider or {}).get("models", []) or []
+                if m.get("name") == model), None)
+    for s in (row or {}).get("refuses") or []:
+        if s not in out:
+            out.append(s)
+    return out
 
 BUILDER_MODELS_FILE = Path(__file__).resolve().parents[2] / "builder-models.json"
 
@@ -72,7 +96,8 @@ def facts(provider: dict, model: str = "") -> dict:
             "reads": reads,
             "request_bytes": meta.get("request_bytes"),
             "file_bytes": meta.get("file_bytes") or meta.get("request_bytes"),
-            "pdf_pages": meta.get("pdf_pages"), "source": source}
+            "pdf_pages": meta.get("pdf_pages"), "source": source,
+            "refuses": refuses(provider, model)}
 
 # The words a person or the Builder Agent reads for what a model takes
 def reads_phrase(f: dict) -> str:

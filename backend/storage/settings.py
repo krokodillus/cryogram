@@ -29,6 +29,11 @@ KEY_URLS = {sp["id"]: sp["key_url"] for sp in DEFAULT_PROVIDER_SPECS}
 def mint_provider_id() -> str:
     return "p_" + uuid.uuid4().hex[:8]
 
+# Where the update check asks for the latest release
+UPDATE_URL = "https://cryogram.app/api/latest"
+
+OLD_UPDATE_URL = "https://api.github.com/repos/krokodillus/cryogram/releases/latest"
+
 DEFAULTS: dict[str, Any] = {
     "server": {"host": config.DEFAULT_HOST, "port": config.DEFAULT_PORT},
 
@@ -43,7 +48,7 @@ DEFAULTS: dict[str, Any] = {
     "preferences": {"notifications": True, "check_updates": True,
                     "share_reports": "ask"},
 
-    "update": {"url": "https://api.github.com/repos/krokodillus/cryogram/releases/latest"},
+    "update": {"url": UPDATE_URL},
 
     "report": {"url": "https://cryogram.app/api/report"}
 }

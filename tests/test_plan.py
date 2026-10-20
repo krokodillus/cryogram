@@ -43,7 +43,7 @@ class PlanTest(unittest.TestCase):
             {"name": "send", "type": "connector",
              "outputs": [{"name": "sent", "type": "boolean"}]}]})
         self.assertTrue(ok["ok"], ok)
-        self.assertTrue(any("what it changes there" in g
+        self.assertTrue(any("changes something outside" in g
                             for g in ok["design_gaps"]), ok)
         self.assertIn("design gaps",
                       node_tools.tool_build_workflow(p).get("error", ""))
@@ -261,7 +261,10 @@ class StuckPlanTest(unittest.TestCase):
         p["plan"] = {"status": "draft", "summary": "s",
                      "nodes": [{"name": "x", "type": "code",
                                 "code": "write_output('y', 1)"}]}
-        r = node_tools.tool_build_workflow(p)
+        from unittest.mock import patch
+        from agent import plan_save
+        with patch.object(plan_save, "gaps_now", return_value=[]):
+            r = node_tools.tool_build_workflow(p)
         self.assertTrue(r["ok"], r)
         self.assertIsNotNone(turnstate.of(p).build_now)
 
@@ -880,6 +883,54 @@ class OrphanSeamTest(unittest.TestCase):
         self.assertFalse([f for f in r["findings"] if "nothing reads" in f],
                          r["findings"])
         self.assertEqual(r["settings"], ["summary_email_address"])
+
+    def test_the_maximum_a_step_names_is_a_setting_and_never_half_of_a_seam(self):
+        from agent import plan_logic
+        append = {"name": "Append row", "type": "connector", "read_only": False,
+                  "external_impact": "adds a row", "code_sketch": "a", "inputs": [],
+                  "outputs": [{"name": "written_run_code", "type": "text"}]}
+        read = {"name": "Read last rows", "type": "connector", "read_only": True,
+                "code_sketch": "r", "max_setting": "max_rows",
+                "inputs": [{"name": "max_rows", "type": "number"}],
+                "outputs": [{"name": "last_rows", "type": "list"}]}
+        p = _workflow([], pid="p_orphan_max")
+        r = plan_logic.check(p, {"summary": "s", "nodes": [append, read],
+                                 "edges": [{"src": "Append row", "dst": "Read last rows"}]})
+        self.assertFalse([f for f in r["findings"] if "max_rows" in f], r["findings"])
+        self.assertIn("max_rows", r["settings"])
+
+class OnlyAStepThatWritesSaysWhatItChangesTest(unittest.TestCase):
+    def _gaps(self, **step):
+        from agent import plan_logic
+        node = {"name": "Read rows", "type": "connector", "code_sketch": "r",
+                "inputs": [], "outputs": [{"name": "rows", "type": "list"}], **step}
+        return [f for f in plan_logic._step_content_gaps("Read rows", node)
+                if "external_impact" in f]
+
+    def test_a_reading_step_needs_no_impact(self):
+        self.assertEqual(self._gaps(read_only=True), [])
+
+    def test_a_writing_step_or_one_that_does_not_say_still_needs_it(self):
+        self.assertTrue(self._gaps(read_only=False))
+        self.assertTrue(self._gaps())
+        self.assertEqual(self._gaps(read_only=False, external_impact="adds a row"), [])
+
+    def test_a_reading_step_is_built_without_one(self):
+        p = _workflow([], pid="p_ro_impact")
+        made = node_tools._create_node(p, "Read rows", "connector", read_only=True)
+        self.assertTrue(made.get("ok"), made)
+        refused = node_tools._create_node(p, "Write rows", "connector", read_only=False)
+        self.assertIn("external_impact", refused.get("error", ""))
+
+    def test_a_step_with_no_code_yet_is_told_so(self):
+        from agent import plan_logic
+        node = {"name": "Read rows", "type": "connector", "read_only": True,
+                "description": "reads the rows", "inputs": [],
+                "outputs": [{"name": "rows", "type": "list"}]}
+        p = _workflow([], pid="p_no_code")
+        r = plan_logic.check(p, {"summary": "s", "nodes": [node], "edges": []})
+        said = [f for f in r["findings"] if "Read rows" in f and "code" in f]
+        self.assertTrue(any("doesn't have any code yet" in f for f in said), r["findings"])
 
 class EmptyEdgeListTest(unittest.TestCase):
     def test_an_empty_edge_list_keeps_the_lines_and_a_full_one_replaces_them(self):

@@ -1,21 +1,23 @@
-# Files an AI step reads: the file goes whole to a model that reads it, and a code step reads it for one that does not
+# An AI step that reads a file: send it in a form the model can read
 
-The models line names what each set-up model reads directly: PDFs and images, images only, or text only. That line decides the shape of a step that reads a file.
+The `[models]` line at the start of each turn says what each model the user set up can read directly: PDFs and images, images only, or text only. That line decides how a step that reads a file is built.
+
+`read_sample` returns a preview of a sample and its stored file reference (`ref`). Pass that reference on the AI step's file input. A file name the user uploaded also finds its reference when only one sample has that name. A label, the file's contents and a path on disk are not the same thing and cannot replace the reference. For nested record outputs, declare `item_fields` before the first call, as the AI guide (62-ai-practice) says.
 
 ## When a model reads the file's type
 
-The file goes to the AI step whole, as its own input, and nothing reads it first: no text extraction, no OCR. A model that reads PDFs reads a difficult PDF (a scan, a two-column layout, a table across pages) better than any extraction, and an extraction in front of it only loses what the model would have read. A file whose content is text goes as text whatever its extension. The kinds a file port takes are filled from the sample the step is tried on, and the step's panel offers only models that read them.
+Send the file straight to a model that can read its type, so the model sees the layout and the pictures. Send the whole file when the task needs all of it. Send only a part of it when you have checked that part is enough, so the model does not get content it does not need. Extract text when the step needs exact fields, text it can search, or to send less data. Use OCR only when the text the step needs cannot be got any other way. Choose from what the model can really read and what the sample really holds, not from a general order of methods.
 
-## When no set-up model reads the file's type
+## When no model the user set up reads the file's type
 
-The file never goes to the AI step. A code step before it turns the file into what the AI step can take, and which conversion depends on what the workflow needs from the file, so decide it and say why in one line:
+The file never goes to the AI step. A code step before it turns the file into something the AI step's model can read. Which conversion it makes depends on what the workflow needs from the file: decide, and say why in one line.
 
-- **The pages as images**, for an AI step on a model that reads images but not PDFs, when the layout carries meaning (a form, a table, a chart, a slide, handwriting, a scan) or when the judgement is about how the page looks. The code step renders each page to an image and the AI step takes the images. It costs tokens per page, so a long document pays for every page.
-- **Text extraction**, when the PDF has a text layer and the workflow needs exact strings (names, ids, amounts, dates) or the AI step's model reads text only. Deterministic and cheap, and it keeps the exact characters, which a picture of the page does not. It gives nothing on a scan, and it loses the layout and every image.
-- **OCR**, when the PDF is a scan and the model reads text only, or the workflow needs exact strings from a scan. Slower and never exact; a wrong character in an id is the usual failure, so a check on the values that matter follows it.
+- **The pages as images**, for an AI step whose model reads images but not PDFs, when the layout carries meaning (a form, a table, a chart, a slide, handwriting, a scan) or when the judgement is about how the page looks. The code step turns each page into an image and the AI step takes the images. Every page costs tokens, so a long document costs more.
+- **Text extraction**, when the PDF holds its text as text (not only as a picture of it) and the workflow needs exact values (names, ids, amounts, dates), or when the AI step's model reads only text. It gives the same result every time, costs little, and keeps the exact characters, which a picture of the page does not. It gets nothing from a scan, and it loses the layout and every picture.
+- **OCR**, when the PDF is a scan and the model reads only text, or the workflow needs exact values from a scan. It is slower and never exact: a wrong character in an id is the usual mistake, so add a check on the values that matter after it.
 
-A spreadsheet, a Word or a PowerPoint file is always a code step's to read first: no set-up model takes one whole. The pictures in a Word or PowerPoint file do not survive text extraction; say so when they matter.
+A spreadsheet, a Word file or a PowerPoint file is always read by a code step first: no model the user set up takes one whole. The pictures in a Word or PowerPoint file are lost when only the text is extracted; say so when they matter.
 
 ## What never happens
 
-Sending a file to a model that cannot read it, which the run refuses before the call. Extracting or OCR-ing a file for a model that could have read it whole. Guessing what a file is from the prompt: the port's kind and the file's real type decide.
+Never send a file to a model that cannot read it, and never guess the file's real type from the prompt. Never extract text or run OCR without thinking when that loses layout or pictures the task needs: compare what the task needs with the sample you have.

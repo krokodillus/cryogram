@@ -81,6 +81,35 @@ class LandAtRestTest(unittest.TestCase):
         self.assertEqual(drive, "Here are the details - Sheet link: https://s. Not provided: Cap.")
         self.assertEqual(items[-1]["shown"], {"url": "https://s"})
 
+    def test_a_window_task_confirmed_after_its_window_closed_starts_nothing(self):
+        from agent import steps
+        p = _workflow([], pid="p_reply_late_done")
+        transcript.append_request(p, "approval", {
+            "title": "Something for you to do", "detail": "Log in, then confirm",
+            "scope": "s", "step": "Log in", "holds": "person"}, iid="apr_p")
+        drive, items = reply.land(p, reply.entry_from({"kind": "click", "iid": "apr_p",
+                                                       "text": "allow"}))
+        self.assertEqual(drive, "")
+        self.assertFalse(p.get("approval_grants"))
+        self.assertEqual([i["kind"] for i in items], ["answer", "message", "request"])
+        self.assertEqual(items[1]["text"], reply.TIMED_OUT)
+        ready = items[2]
+        self.assertEqual(ready["payload"]["holds"], "ready")
+        self.assertIn('"Log in"', ready["payload"]["title"])
+        drive, _ = reply.land(p, reply.entry_from({"kind": "click", "iid": ready["iid"],
+                                                   "text": "allow"}))
+        self.assertTrue(drive.startswith("Yes to"))
+        self.assertEqual([(g["step"], g.get("kind")) for g in p["approval_grants"]],
+                         [("Log in", "ready")])
+
+        transcript.append_request(p, "approval", {"title": "Something for you to do",
+                                                  "step": "Log in", "holds": "person"},
+                                  iid="apr_p2")
+        drive, items = reply.land(p, reply.entry_from({"kind": "click", "iid": "apr_p2",
+                                                       "text": "deny"}))
+        self.assertEqual((drive, [i["kind"] for i in items]), ("", ["answer"]))
+        self.assertNotIn("Log in", steps.declined_steps(p))
+
     def test_an_upload_click_keeps_its_chips(self):
         p = _workflow([], pid="p_reply_upload")
         transcript.append_request(p, "ask", {"question": "File?", "upload": True},
@@ -148,6 +177,9 @@ class DeliverTest(unittest.TestCase):
             self.assertEqual(out, {"landed": "parked"})
             self.assertIn("later", turns.unread_interjections(pid))
             self.assertTrue(turns.should_stop(pid))
+
+            self.assertNotIn("later", " ".join(turns.take_interjections(pid)))
+            self.assertIn("later", turns.unread_interjections(pid))
         finally:
             turns.finish(pid)
 
@@ -199,6 +231,16 @@ class OneSettleTest(unittest.TestCase):
             {"kind": "typed", "text": "No thanks"})), {"landed": "resolved"})
         t.join(5)
         self.assertEqual(got["a"]["via"], "click")
+
+    def test_a_long_option_is_kept_whole_so_the_card_marks_it(self):
+        p = _workflow([], pid="p_long_option")
+        option = "Yes, set up these headers if missing: " + ", ".join(f"column_{i}" for i in range(30))
+        req = transcript.append_request(p, "ask", {"question": "Set them up?",
+                                                   "options": [option, "Not yet"]}, iid="ask_long")
+        reply.settle(p, req, {"text": option, "via": "click", "cid": "c"})
+        answer = [i for i in p["transcript"] if i.get("kind") == "answer"][-1]
+        self.assertGreater(len(option), 200)
+        self.assertEqual(answer["shown"], option)
 
     def test_live_and_parked_settles_write_the_same_item(self):
         p1 = _workflow([], pid="p_settle_live")

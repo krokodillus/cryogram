@@ -228,10 +228,12 @@ class NamedModelTest(unittest.TestCase):
             seen.update(model_ref)
             return {"structured": {"n": 1}}
         with mock.patch.object(providers, "call", fake):
-            capability.ai_call("p", {"model": "claude-sonnet-5", "temperature": 0.4}, {},
+            capability.ai_call("p", {"model": "claude-haiku-4-5-20251001", "temperature": 0.4}, {},
                                output_ports=[{"name": "n", "type": "number"}])
         self.assertEqual(seen["temperature"], 0.4)
-        self.assertEqual(providers.resolve({"model": "claude-sonnet-5", "temperature": 0.4})["temperature"], 0.4)
+        self.assertEqual(providers.resolve({"model": "claude-haiku-4-5-20251001", "temperature": 0.4})["temperature"], 0.4)
+
+        self.assertIsNone(providers.resolve({"model": "claude-sonnet-5", "temperature": 0.4})["temperature"])
 
 class FileKindsTest(unittest.TestCase):
     def tearDown(self):
@@ -309,7 +311,7 @@ class TemperatureTest(unittest.TestCase):
                 raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
                                              _io.BytesIO(b'{"error":{"message":"Unsupported value: temperature does not support 0 with this model."}}'))
             return _Resp(reply)
-        adapters._NO_TEMPERATURE.discard("gpt-new")
+        adapters._REFUSED.pop("gpt-new", None)
         with mock.patch.object(urllib.request, "urlopen", fake):
             res = adapters.call("openai", "gpt-new", "k", "read it", [], temperature=0,
                                 schema={"type": "object", "properties": {"total": {"type": "number"}}})
@@ -318,7 +320,7 @@ class TemperatureTest(unittest.TestCase):
             adapters.call("openai", "gpt-new", "k", "read it", [], temperature=0,
                           schema={"type": "object", "properties": {"total": {"type": "number"}}})
             self.assertNotIn("temperature", bodies[-1])
-        adapters._NO_TEMPERATURE.discard("gpt-new")
+        adapters._REFUSED.pop("gpt-new", None)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,52 +1,52 @@
 ---
 name: airtable
-description: WHEN a workflow step needs to read or write records in Airtable - the personal-access-token route, exact user setup steps, the request pattern, batching and known gotchas
+description: WHEN a step reads or writes Airtable records: how to get a personal access token, how to page through records, how to write them, and what makes a request fail
 tier: 2
 kind: action
 depends_on: []
-version: 1.1.0
-last_updated: 2026-09-06
+version: 2.0.0
+last_updated: 2026-10-13
 ---
 
 # Reading and writing Airtable records
 
-## The route: a personal access token
+## Use a personal access token
 
-Legacy API keys are dead (removed in February 2024): a personal access token plus the REST API is the only live route. No OAuth app, no admin.
+If the user already has a working connection to Airtable and it suits this step, use it. Otherwise a personal access token with limited permissions is a simple way to reach the user's own base, though it is not the only way to connect. Before you ask the user to create a token, check that their Airtable workspace lets them create one. Never use a legacy API key.
 
-## User setup
+## What to tell the user to do
 
-Give it complete:
+Give all five steps at once:
 
-1. https://airtable.com/create/tokens, then "Create new token", and name it.
-2. Scopes: add `data.records:read` for reading and `data.records:write` for writing, only what the step needs.
-3. Access: add the specific base the workflow touches. One question to the user: just this base, or the whole workspace? The token can never exceed the user's own permission, so writes need editor or better.
-4. Copy the token (shown once, starts with `pat`) and collect it through the masked ask, as a secret named for what it is (the Airtable token).
-5. The ids come from the URL: open the table in the browser, airtable.com/appXXXX/tblYYYY/..., where the base id is the `app...` segment and the table id the `tbl...` segment. Prefer the `tbl` id over the table name, since it survives a rename; both work in the URL.
+1. Go to https://airtable.com/create/tokens, choose "Create new token", and give it a name.
+2. Under scopes, add `data.records:read` if the step reads and `data.records:write` if it writes. Add only the scopes the step needs.
+3. Under access, add only the base the workflow needs. Give the token access to the whole workspace only when the workflow really works across several bases; do not ask the user about it as a matter of course. A token can never do more than the user who made it can.
+4. Copy the token. Airtable shows it once, and it starts with `pat`. Ask for it with the masked ask (the card that hides what the user types), and store it as a secret with a name that says what it is, such as the Airtable token.
+5. Read the ids from the table's address: open the table in the browser, and the address looks like airtable.com/appXXXX/tblYYYY/... The base id is the part that starts with `app`, and the table id is the part that starts with `tbl`. Use the `tbl` id in the request rather than the table's name, because the id still works after the user renames the table. The table's name also works in the request address, but the id is safer.
 
-## The request pattern
+## How to write the requests
 
-- Base URL `https://api.airtable.com/v0/{baseId}/{tableId}` with the header `Authorization: Bearer <token>`.
-- Read: GET; `pageSize` at most 100; a response with more pages carries an opaque `offset`, which you pass back verbatim to continue. `filterByFormula` narrows server-side (URL-encode it).
-- Create: POST `{"records": [{"fields": {...}}, ...]}`, at most 10 records per request (a hard limit), so loop in batches of 10.
-- Update: PATCH merges only the named fields. PUT is destructive, clearing every field not sent, so use PATCH.
-- Upsert: PATCH with `"performUpsert": {"fieldsToMergeOn": ["Email"]}`. Zero matches creates, one updates, and more than one fails the whole request, so merge on a field that is genuinely unique.
-- timeout=15; retry timeouts, connection errors and 5xx with a short backoff; on a 429 wait 30 seconds (no Retry-After is documented); never retry any other 4xx.
-- The success signal is a 200 with `{"records": [...]}`, each record carrying `id`, `createdTime` and `fields`. Errors come as `{"error": {"type", "message"}}`.
+- The base address is `https://api.airtable.com/v0/{baseId}/{tableId}`, and every request carries the header `Authorization: Bearer <token>`.
+- To read, send GET. Set `pageSize` to 100 at most. When a response has more pages, it contains an `offset` value: pass it back exactly as you received it to get the next page. Put a formula in `filterByFormula` to make Airtable filter the records before it sends them (URL-encode the formula).
+- To create records, send POST with `{"records": [{"fields": {...}}, ...]}`. A request can hold 10 records at most, and Airtable enforces this, so send the records in batches of 10.
+- To update records, send PATCH, which changes only the fields you name. Do not send PUT: it clears every field you leave out. Use PATCH.
+- To update a record if it exists and create it if not, send PATCH with `"performUpsert": {"fieldsToMergeOn": ["Email"]}`. If no record matches, Airtable creates one. If one matches, it updates it. If more than one matches, the whole request fails, so merge on a field that has a different value in every record.
+- Set `timeout=15`. A request that only reads may be retried a few times when the service is briefly unavailable, and you must keep the number of retries small. Wait as long as Airtable's documentation says to wait after a rate-limit response. A request that writes is sent once, unless a mechanism that you have checked makes it safe to repeat.
+- A request worked when Airtable answers 200 with `{"records": [...]}`, where each record has `id`, `createdTime` and `fields`. An error comes back as `{"error": {"type", "message"}}`.
 
 ## What goes wrong
 
-- The rate limit is 5 requests a second per base: batch 10 per request and pace. A bulk load is batches with a small sleep, never a request per record.
-- Computed fields are read-only (formula, rollup, lookup, count, autonumber, created and modified times): writing one gives a 422. Send only the fields a human could type.
-- `typecast: true` converts strings best-effort and silently creates new select options, so a typo becomes a new category. For a controlled list leave typecast off and surface the 422 (INVALID_MULTIPLE_CHOICE_OPTIONS) so the user fixes the value.
-- Fields are keyed by name by default, so a rename in Airtable breaks the step. For a long-lived workflow key by field id and set `returnFieldsByFieldId: true`.
-- A 403 means the token was not given this base (fix it under the token's Access). A 404 means a wrong base or table id (re-copy it from the URL). A 422 means a value does not fit the field, and the body names it.
-- The domain is api.airtable.com.
+- Airtable allows 5 requests a second for each base. Send 10 records per request and wait between requests. Load many records in batches with a short pause between them, and never send one request per record.
+- A computed field cannot be written: formula, rollup, lookup, count, autonumber, created time and modified time fields. Writing one gives a 422 error. Send only the fields a person could type into.
+- `typecast: true` makes Airtable convert strings as well as it can, and it creates a new select option for any value it does not know, so a typo becomes a new category. When the field has a fixed list of options, leave `typecast` off and show the user the 422 error (INVALID_MULTIPLE_CHOICE_OPTIONS), so they correct the value.
+- Airtable identifies fields by their names unless you ask for ids, so a field the user renames in Airtable breaks the step. For a workflow that will run for a long time, identify the fields by id and set `returnFieldsByFieldId: true`.
+- For a 403 or 404 error, check the token's access and check the base id and table id you used. The status code does not tell you which of them is wrong. A 422 error usually says in its body what is wrong with the fields or values.
+- The host to declare is api.airtable.com.
 
-## If company IT blocks it
+## If the company's IT department blocks it
 
-When token creation is disabled by workspace policy, the create-token page says so. The one-line ask for the workspace admin: please create a scoped personal access token limited to the base, with data.records read and write, and share it with me. A personal access token is bounded by the user's own permission, the least-privileged Airtable integration.
+When the workspace's rules stop the user creating tokens, the create-token page says so. Give the user this one sentence to send to the workspace admin: please create a personal access token limited to the base, with data.records read and write, and share it with me. A personal access token can only do what the user can do, so it is the Airtable connection with the fewest permissions.
 
 ## Official docs
 
-Check here if a route fails: https://airtable.com/developers/web/api/introduction
+If a request fails, check Airtable's documentation: https://airtable.com/developers/web/api/introduction

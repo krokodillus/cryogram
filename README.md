@@ -21,7 +21,7 @@ Run the line below in your terminal to download and install the latest version d
 
 The installer downloads the source code for the latest GitHub release. It installs into `~/Applications/Cryogram` on a Mac or `%LOCALAPPDATA%\Programs\Cryogram` on Windows, and asks whether to add a shortcut to Launchpad or the Start menu. Once installed, you can also start it by typing `cryogram` in a new terminal.
 
-If you prefer to download it yourself, choose **Source code (zip)** on the [latest release](https://github.com/krokodillus/cryogram/releases/latest), unzip it, and open a terminal in the extracted folder: **New Terminal at Folder** on a Mac or **Open in Terminal** on Windows. Run `sh install.sh` on a Mac, or `powershell -ExecutionPolicy Bypass -File .\install.ps1` in PowerShell on Windows. The script copies the app into the same installation folder, so it does not stay in Downloads.
+If you prefer to download it yourself, choose **Source code (zip)** on the [latest release](https://cryogram.app/download), unzip it, and open a terminal in the extracted folder: **New Terminal at Folder** on a Mac or **Open in Terminal** on Windows. Run `sh install.sh` on a Mac, or `powershell -ExecutionPolicy Bypass -File .\install.ps1` in PowerShell on Windows. The script copies the app into the same installation folder, so it does not stay in Downloads.
 
 You can also clone the repository and run `Start Cryogram.command` on a Mac or `start.bat` on Windows directly from your checkout.
 

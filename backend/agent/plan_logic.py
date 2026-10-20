@@ -13,6 +13,10 @@ import step_types
 from step_types import CODE_TYPES, OUTSIDE_TYPES, carries_code, reaches_outside
 from runtime import verifier
 
+# The question for a file a step reads that nothing provides: where it comes from depends on what it is for
+FILE_SOURCE_GAP = (
+    "the \"{step}\" step reads the file \"{name}\", which nothing provides. Decide where it comes from by what the file is for: if each run works on a different file (an invoice the user uploads, a new export), add a user-input step that asks for it on each run and set that step's per_run_reason field; if it is the same file on most runs (a template, a document of criteria), store it as a setting with declare_variables, its value the uploaded sample's stored file reference")
+
 # Edge endpoints normalise to a step name, whether given as plan name, node id or node name
 def _ref_to_name(ref: str, plan_names: set, id_to_name: dict,
                  existing_names: set) -> Optional[str]:
@@ -90,10 +94,11 @@ def _step_content_gaps(nm: str, node: dict) -> list[str]:
     if pol not in (None, "", "stop", "proceed", "log"):
         out.append(f'the "{nm}" step\'s on_invalid_items is {pol!r} - it must '
                    "be one of stop (default), proceed or log")
-    if reaches_outside(node) \
+
+    if step_types.writes_outside(node) \
             and not str(node.get("external_impact") or "").strip():
-        out.append(f'the "{nm}" step reaches an outside system but does not '
-                   "say what it changes there - add external_impact in plain language (it is what the user approves), and read_only: true if it only reads")
+        out.append(f'the "{nm}" step changes something outside but does not '
+                   "say what - add external_impact in plain language (it is what the user approves), or read_only: true if it only reads")
     for kind_, key in (("input", "inputs"), ("output", "outputs")):
         for p in node.get(key) or []:
             pn = p.get("name")
@@ -186,7 +191,11 @@ def check(workflow: dict, plan: dict) -> dict:
 
     ambiguous = environments.ambiguous_names(workflow)
 
-    stored = set(environments.resolve(workflow))
+    from storage import secrets_store
+    stored = {name for name, r in environments.resolve(workflow).items()
+              if (r.get("secret") and r.get("owner")
+                  and secrets_store.has_secret(name, owner=r["owner"]))
+              or environments.value_is_set(r.get("value"))}
     for n in plan_nodes:
         check = step_types.function(step_type(n), "asks_for_a_stored_value")
         if check:
@@ -290,7 +299,8 @@ def check(workflow: dict, plan: dict) -> dict:
                     "differently. Align them (rename one) so the value actually arrives")
                 continue
 
-            orphans = _orphan_outputs(nm) if not reads_pathway else []
+            is_max = pn == str(node.get("max_setting") or "").strip()
+            orphans = _orphan_outputs(nm) if not reads_pathway and not is_max else []
             if orphans:
                 a, o = orphans[0]
                 more = (f' (its other unread outputs: '
@@ -304,6 +314,10 @@ def check(workflow: dict, plan: dict) -> dict:
                 continue
 
             ptype = str(p.get("type") or "").strip()
+
+            if ptype == "file":
+                findings.append(FILE_SOURCE_GAP.format(step=nm, name=pn))
+                continue
             if ptype and not environments.setting_type(ptype):
                 findings.append(
                     f'the "{nm}" step reads "{pn}" as {ptype!r}, but nothing '
@@ -317,8 +331,8 @@ def check(workflow: dict, plan: dict) -> dict:
         cfg_sketch = (str(node.get("code") or "").strip()
                       or str(node.get("code_sketch") or "").strip())
         if t in CODE_TYPES and not cfg_sketch:
-            findings.append(f'the "{nm}" step has no description of what it does '
-                            "- add the proven code from your exploration, or a plain sketch of how it turns inputs into outputs")
+            findings.append(f'the "{nm}" step doesn\'t have any code yet - it '
+                            "fills in from the step's first successful try, or add a code_sketch for a step you won't try")
         no_prompt = step_types.function(step_type(node), "missing_prompt")
         if no_prompt:
             findings.extend(no_prompt(nm, node))
@@ -406,7 +420,8 @@ def check(workflow: dict, plan: dict) -> dict:
                       + _gate.check_fake(code, declared)
                       + _gate.check_undefined_names(code)
                       + _gate.check_recording(code)
-                      + _gate.check_silent_loop(code)):
+
+                      + (_gate.check_silent_loop(code) if reaches_outside(n) else [])):
                 findings.append(f'step "{n.get("name")}": {v}')
         for v in _gate.check_secret_ports(code, secret_ports):
             findings.append(f'step "{n.get("name")}": {v} (or drop the '
@@ -507,6 +522,8 @@ def check(workflow: dict, plan: dict) -> dict:
     findings += _output_name_mismatches(workflow["id"], plan_nodes)
 
     findings += _per_item_findings(workflow["id"], plan_nodes)
+
+    findings += _max_setting_findings(plan_nodes)
 
     findings += _one_kind_of_work(plan_nodes)
 
@@ -875,7 +892,8 @@ def _recorded_type_mismatches(workflow_id: str, plan_nodes: list) -> list[str]:
         typed = [p for p in n.get("outputs") or []
                  if p.get("type") and p.get("type") != "file"
                  and p.get("name") not in said]
-        for prob in _ports.check_ports(typed, recorded, require_all=True):
+        for prob in _ports.check_ports(typed, recorded, require_all=True,
+                                       empty_ok=not step_types.empty_list_is_a_warning(n)):
             out.append(f'step "{n.get("name")}" output "{prob.get("port")}": in the '
                        f"step's try, {prob.get('problem')} - the try is judged as "
                        "a run: make the step produce it, or mark the output optional on the plan step if it may genuinely be empty")
@@ -939,6 +957,34 @@ def _called_names(code: str) -> set:
             out.add(n.func.id)
     return out
 
+MAX_SETTING_NEEDED = ("collects a list - name the setting that holds its maximum number of records as max_setting: one of the step's number inputs, set to the number the user gave when asked once how many records they want")
+
+# A step that collects a list from outside names the setting holding its maximum number of records, and its code reads it
+def _max_setting_findings(plan_nodes: list) -> list[str]:
+    from agent import gate
+    out: list[str] = []
+    for n in plan_nodes or []:
+        if step_type(n) not in ("browser", "connector") or not n.get("read_only"):
+            continue
+        lists = [p.get("name") for p in n.get("outputs") or [] if p.get("type") == "list"]
+        if not lists:
+            continue
+        nm = n.get("name") or "?"
+        ms = str(n.get("max_setting") or "").strip()
+        if not ms:
+            out.append(f'step "{nm}" {MAX_SETTING_NEEDED}')
+            continue
+        numbers = {p.get("name") for p in n.get("inputs") or [] if p.get("type") == "number"}
+        if ms not in numbers:
+            out.append(f'step "{nm}": max_setting names "{ms}", which is not one of the '
+                       "step's number inputs")
+            continue
+        code = str(n.get("code") or "")
+        if code.strip() and ms not in gate.read_input_names(code):
+            out.append(f'step "{nm}" declares max_setting "{ms}" but its code never reads it - '
+                       f'read_input("{ms}") and stop collecting at that number')
+    return out
+
 # A step that loops over a list input declares the list and its item key, and records each item as it lands
 def _per_item_findings(workflow_id: str, plan_nodes: list) -> list[str]:
     from runtime.executor import iterated_input_names
@@ -955,10 +1001,10 @@ def _per_item_findings(workflow_id: str, plan_nodes: list) -> list[str]:
         looped = {x for x in iterated_input_names(code) if x in declared}
         pi = n.get("per_item") if isinstance(n.get("per_item"), dict) else None
         if not pi:
-            if looped:
+            if looped and step_type(n) in ("connector", "browser"):
                 names = ", ".join(sorted(f'"{x}"' for x in looped))
                 out.append(f'step "{nm}" works through {names} item by item - '
-                           "declare per_item {input, key} on the step, record each item the moment it is done with checkpoint(key, result), and build the outputs from checkpoints(), so a stop keeps what it got and the user can proceed with the saved results")
+                           "declare per_item {input, key} on the step, record each item the moment it is done with checkpoint(key, result), and publish checkpoint_values(keys) on a list output, so a stop keeps what it got and the user can proceed with the saved results")
             continue
         inp, key = str(pi.get("input") or ""), str(pi.get("key") or "")
         if not inp or not key:
@@ -972,7 +1018,7 @@ def _per_item_findings(workflow_id: str, plan_nodes: list) -> list[str]:
         called = _called_names(code)
         if "checkpoint" not in called or "checkpoints" not in called:
             out.append(f'step "{nm}" declares per_item over "{inp}" but its code '
-                       "does not record each item as it lands - call checkpoint(key, result) right after each item and build the outputs from checkpoints(), so the step finishes from the record on any subset of the list")
+                       "does not record each item as it lands - call checkpoint(key, result) right after each item, skip the keys checkpoints() already holds, and publish checkpoint_values(keys) on a list output, so the step finishes from the record on any subset of the list")
         rec = cells.latest_ok_for(workflow_id, n, kind="code")
         items = ((rec or {}).get("inputs") or {}).get(inp)
         if isinstance(items, list) and items and isinstance(items[0], dict):

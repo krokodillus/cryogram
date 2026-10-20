@@ -240,6 +240,20 @@ def windows(workflow_id: str) -> list[dict]:
                         "reason": r.get("reason") or "", "captured": kept})
     return out
 
+# The folded request index a numbered window put on its result, for comparing the next window with it
+def window_index(workflow_id: str, n: int) -> list:
+    seen = 0
+    for r in _load(workflow_id):
+        if not (r.get("ok") and isinstance(r.get("output"), dict)
+                and "$missing_evidence" not in r["output"]):
+            continue
+        if capture_refs(r["output"]):
+            seen += 1
+            if seen == n:
+                cap = r["output"].get("$capture") or {}
+                return cap.get("calls") if isinstance(cap.get("calls"), list) else []
+    return []
+
 # Every window recording this workflow is holding, as (name, reference) pairs
 def capture_held(workflow_id: str) -> list[tuple]:
     seen: list[tuple] = []
@@ -272,12 +286,19 @@ def forget_captures(workflow_id: str) -> int:
 # The latest successful outputs by name - what recorded-input chaining reads from
 def latest_outputs(workflow_id: str) -> dict:
     out: dict = {}
+
+    given: dict = {}
     for r in _load(workflow_id):
         if r.get("ok") and isinstance(r.get("output"), dict) \
                 and "$missing_evidence" not in r["output"]:
             out.update({k: v for k, v in r["output"].items()
                         if not str(k).startswith("$")})
             out.update(capture_refs(r["output"]))
+            if isinstance(r.get("inputs"), dict):
+                given.update({k: v for k, v in r["inputs"].items()
+                              if not str(k).startswith("$")
+                              and not (isinstance(v, str) and v.startswith("$"))})
+    out = {**given, **out}
 
     for w in windows(workflow_id):
         out.update({f"{k}#{w['n']}": ref for k, ref in w["captured"].items()})
@@ -298,6 +319,7 @@ def inventory(workflow_id: str) -> list[dict]:
         if r.get("step_id"):
             seen["id"] = r["step_id"]
         seen["tries"] += 1
+        seen["last_ts"] = r.get("ts")
         if r.get("ok") and isinstance(r.get("output"), dict) \
                 and "$missing_evidence" not in r["output"]:
             seen["kind"] = r.get("kind", "code")

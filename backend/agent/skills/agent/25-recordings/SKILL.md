@@ -1,24 +1,21 @@
 ---
 name: 25-recordings
-description: WHEN an undocumented external system must become scriptable - capture its traffic (an app-recorded HAR/demonstration, or an uploaded HAR) and derive the call contract from the recording sample
+description: WHEN no documentation says how to call a service, and you work it out from a HAR file or from the user showing the steps
 tier: 2
 kind: action
 depends_on: []
-version: 2.0.0
-last_updated: 2026-09-06
+version: 3.0.0
+last_updated: 2026-10-13
 ---
 
-# Recordings: the user showed you once
+# Recordings: work out a request from the traffic you saw
 
-An external system with no public API and no documentation becomes scriptable from a recording of it being used. The app captures the recording itself, so offer these routes in this order. When you already drive a browser session, record the traffic while browsing (load "browser/har-capture") and import it with import_recording; the user does nothing. When the user has to show the flow, the demo recorder (load "browser/demo-recording") records their one demonstration over the app's own window, after their explicit yes. Only as a fallback do they export a HAR file from their browser's developer tools ("Save all as HAR") and upload it; the app recognises a recording upload and scrubs it the same way.
+Use a recording when neither the service's documentation nor the current guide says how to make the request you need. A recording shows one example the user was allowed to make. It does not show what else the service can do, and it is not permission to call every host in it.
 
-A sample of kind "recording" holds `actions` (the clicks, with timestamps) and `calls` (the requests and their responses). Credential values are already masked to "<redacted, N chars>"; the field that carried one is your sign of where the authentication happens.
+A browser try already records the page's traffic: load "browser/har-capture" to read it. When the user must show you steps nobody has documented, load "browser/demo-recording", which says how to ask them and what is recorded. A HAR file the user uploads is a last resort, never a chore you give them by default.
 
-Working a recording:
+`read_sample` returns a short preview of a sample and its stored file reference. Read the requests you need in a code try, filtered by address, method or time, rather than printing the whole recording. Match what the user did to the requests it caused, and tell the requests that carry the task's data apart from tracking and page files. Write down the method, the address, the parameters, how the request signs in, and what its answer means. The saved workflow uses that description of the request, not the recording you explored.
 
-- A recording is large. read_sample gives a capped preview and the file's path; read the rest selectively, filtering by url or method, and never dump it whole.
-- Correlate clicks with calls: the click at one moment caused the calls just after it. That separates the task's calls from page noise such as assets and analytics, which you ignore.
-- Distil the contract of the calls that matter: method, url shape, required parameters, request and response structure. That contract goes into the connector step's code; the raw recording is never read at run time.
-- Follow the authentication: where a masked field first appears in a response (the login or token endpoint) and where it is then sent (a header, a cookie, a parameter). The credential is a secret the user provides by name: ask for the name, never the value, and never quote a masked value's surroundings in a way that invites pasting the real secret into the chat.
-- The hostnames the demonstration touched are the plan step's `domains`; carry them, or the connector is blocked from reaching them.
-- Seed the connector's tests from real request and response pairs, masked values staying masked. One demonstration is one example: treat an uncertain field as a question for the user, not a guess.
+Credentials in a recording (passwords, keys, tokens and cookies) are masked. A masked field shows how the request signs in; it is never a credential you can use. Ask for a missing credential with the masked question card. Never read the browser profile's private files or session files, and never put a cookie value in an output. A request that needs the browser's signed-in session stays in the browser step, unless the user gives a credential a connector step can use.
+
+Declare only the hosts the connector step needs for the task, including an address it is redirected to on the way, not every host in the HAR file. Keep the real masked requests and answers as evidence and as tests. When you are not sure what a field means, find it in the documentation or run a small try that answers it. Ask the user only about facts that are theirs.

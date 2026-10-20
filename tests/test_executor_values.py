@@ -976,7 +976,8 @@ class NothingToDoAndIssueChainTest(unittest.TestCase):
         port = {"name": "people", "type": "any"}
         node_tools.derive_port_schema(
             port, [{"name": "a", "url": "u"}, {"name": "b", "url": "v"}])
-        p = _workflow([{"id": "n_b", "name": "Browse results", "type": "code",
+        p = _workflow([{"id": "n_b", "name": "Browse results", "type": "browser",
+                       "read_only": True, "url": "https://example.com",
                        "config": {"code": "x"}, "inputs": [],
                        "outputs": [port], "tests": []}],
                      pid="p_empty1")
@@ -1002,6 +1003,38 @@ class NothingToDoAndIssueChainTest(unittest.TestCase):
         if res2.get("run_id"):
             run_state.finish(res2["run_id"])
         self.assertEqual(res2.get("status"), "completed", res2)
+
+    def test_an_empty_list_from_a_code_step_is_an_answer(self):
+        from unittest import mock
+
+        from agent import node_tools
+        from runtime import env_checks
+        port = {"name": "review_candidates", "type": "list"}
+        node_tools.derive_port_schema(port, [{"name": "a"}, {"name": "b"}])
+        self.assertTrue(port["schema"].get("x-nonempty"))
+        p = _workflow([{"id": "n_f", "name": "Select people", "type": "code",
+                       "config": {"code": "x"}, "inputs": [],
+                       "outputs": [port], "tests": []}],
+                     pid="p_empty2")
+        with mock.patch.object(executor, "_execute",
+                               return_value=({"review_candidates": []}, False)), \
+             mock.patch.object(env_checks, "check_all_nodes", return_value=[]), \
+             mock.patch.object(env_checks, "check_node", return_value=[]):
+            res = executor.run_workflow(p, {})
+        if res.get("run_id"):
+            run_state.finish(res["run_id"])
+        self.assertEqual(res.get("status"), "completed", res)
+
+    def test_a_reading_step_handed_an_empty_list_finds_nothing_quietly(self):
+        import step_types
+        node = {"type": "browser", "read_only": True}
+        self.assertTrue(step_types.empty_list_is_a_warning(node, {}, ()))
+        self.assertFalse(step_types.empty_list_is_a_warning(
+            node, {"review_candidates": []}, {"review_candidates"}))
+        self.assertFalse(step_types.empty_list_is_a_warning({"type": "code"}))
+        self.assertFalse(step_types.empty_list_is_a_warning({"type": "ai"}))
+        self.assertFalse(step_types.empty_list_is_a_warning(
+            {"type": "connector", "read_only": False}))
 
     def test_a_fix_turn_chains_the_failing_runs_inputs(self):
         from agent import node_tools
@@ -1192,6 +1225,9 @@ class EverySendRefusedTest(unittest.TestCase):
                 n = int(self.headers.get("Content-Length") or 0)
                 self.rfile.read(n)
                 H.hits.append(self.path)
+                if cls.mode["status"] == "drop":
+                    self.close_connection = True
+                    return
 
                 if self.path in cls.mode:
                     return self._answer(cls.mode[self.path])
@@ -1225,6 +1261,8 @@ class EverySendRefusedTest(unittest.TestCase):
             "            out.append({'row': row, 'status': r.status})\n"
             "    except urllib.error.HTTPError as e:\n"
             "        out.append({'row': row, 'status': e.code})\n"
+            "    except Exception as e:\n"
+            "        out.append({'row': row, 'status': 'failed: ' + type(e).__name__})\n"
             "write_output('result', out)\n")
         return {"id": nid, "name": "Send the rows", "type": "connector",
                 "read_only": False, "approval_suppressed": True,
@@ -1246,6 +1284,15 @@ class EverySendRefusedTest(unittest.TestCase):
         res2 = executor.run_workflow(p, {}, run_id=res["run_id"])
         self.assertEqual(res2["status"], "completed", res2)
         run_state.finish(res2["run_id"])
+
+    def test_every_send_dropped_with_no_answer_pauses_as_unverified(self):
+        self.mode["status"] = "drop"
+        p = _workflow([self._node("n_drop")], pid="p_senddrop")
+        res = executor.run_workflow(p, {})
+        self.mode["status"] = 200
+        self.assertEqual(res["status"], "halted", res)
+        self.assertEqual(res["reason"], "send-unverified")
+        self.assertFalse(run_state.has_fired(res["run_id"], "n_drop"))
 
     def test_every_send_answering_500_stops_with_the_statuses_named(self):
         self.mode["status"] = 500
@@ -1304,6 +1351,36 @@ class EverySendRefusedTest(unittest.TestCase):
                            "per_item": {"input": "rows", "key": "id"}},
                 "inputs": [{"name": "rows", "type": "list"}],
                 "outputs": [{"name": "result", "type": "list"}]}
+
+    def test_a_send_refused_outright_leaves_no_row_counted_as_done(self):
+        code = (
+            "import json, urllib.request\n"
+            "rows = read_input('rows')\n"
+            "done = checkpoints()\n"
+            "for row in rows:\n"
+            "    if row['id'] in done:\n"
+            "        continue\n"
+            f"    req = urllib.request.Request('http://127.0.0.1:{self.port}/send', data=json.dumps(row).encode(), headers={{'content-type': 'application/json'}}, method='POST')\n"
+            "    try:\n"
+            "        with urllib.request.urlopen(req, timeout=5) as r:\n"
+            "            checkpoint(row['id'], {'id': row['id'], 'outcome': 'sent'})\n"
+            "    except urllib.error.HTTPError as e:\n"
+            "        checkpoint(row['id'], {'id': row['id'], 'outcome': 'failed', 'status': e.code})\n"
+            "write_output('result', list(checkpoints().values()))\n")
+        node = {**self._ledger_node("n_refled"), "config": {**self._ledger_node("n_refled")["config"], "code": code}}
+        self.mode["status"] = 429
+        rows = [{"id": "a"}, {"id": "b"}]
+        p = _workflow([node], pid="p_refled")
+        res = executor.run_workflow(p, {"rows": rows})
+        self.assertEqual(res["status"], "halted", res)
+        self.assertEqual(res["reason"], "rate-limited")
+        self.handler.hits.clear()
+        self.mode["status"] = 200
+        res2 = executor.run_workflow(p, {}, run_id=res["run_id"])
+        self.assertEqual(res2["status"], "completed", res2)
+        self.assertEqual(len(self.handler.hits), 2)
+        self.assertEqual({x["outcome"] for x in res2["outputs"]["n_refled"]["result"]}, {"sent"})
+        run_state.finish(res2["run_id"])
 
     def test_a_step_with_a_ledger_is_re_entered_and_skips_the_rows_that_went(self):
         self.mode["status"] = [200, 200, 503]

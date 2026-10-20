@@ -282,18 +282,12 @@ def _criteria(node: dict) -> list:
     return node.get("config", {}).get("criteria", []) or []
 
 # Fits a step's raw result to its declared outputs, wrapping a lone value into a single port
-def _shape_output(node: dict, raw: Any) -> dict:
+def _shape_output(node: dict, raw: Any, *, named: bool = False) -> dict:
     shape = step_types.function(node["type"], "shape_output")
     if shape:
         return shape(node, raw)
-    ports = node.get("outputs", [])
-    if len(ports) == 1:
-        if isinstance(raw, dict) and set(raw.keys()) == {ports[0]["name"]}:
-            return raw
-        return {ports[0]["name"]: raw}
-    if isinstance(raw, dict):
-        return raw
-    return {p["name"]: raw for p in ports}
+    from runtime.output_contract import normalize
+    return normalize(node.get("outputs", []), raw, named=named)
 
 def _secret_literals(code: str) -> set:
     return set(environments.SECRET_LITERAL_RE.findall(code or ""))
@@ -980,6 +974,11 @@ def _run_workflow(workflow: dict, entry_inputs: dict, run_id: Optional[str] = No
                 calls = report.get("calls") if isinstance(report.get("calls"), dict) else {}
                 verdict = _send_verdict(calls) if writes_outside(node) else None
                 if verdict and (verdict["refused"] or verdict["partial"]):
+                    if verdict["refused"]:
+                        try:
+                            ckpt.unlink()
+                        except OSError:
+                            pass
                     raise sandbox.NodeError("SendRefused" if verdict["refused"] else "SendPartial",
                                             _send_sentence(verdict),
                                             detail={"sent": bool(verdict["fired"]), "calls": calls})
@@ -993,7 +992,7 @@ def _run_workflow(workflow: dict, entry_inputs: dict, run_id: Optional[str] = No
                           else _record_ai_usage(node, corpus_pid, run_id, usage))
                 if fired:
                     run_state.record_fired(run_id, nid)
-                output = _shape_output(node, raw)
+                output = _shape_output(node, raw, named=report.get("outputs_named", False))
             except NotImplementedError:
                 raise
             except sandbox.NodeStopped as e:
@@ -1073,8 +1072,10 @@ def _run_workflow(workflow: dict, entry_inputs: dict, run_id: Optional[str] = No
             if failed:
                 return _carry_out(failed, run_id, corpus_pid, nid, node, inputs)
 
-            out_problems = port_checks.check_ports(node.get("outputs", []), output,
-                                                   require_all=True)
+            looped = iterated_input_names(str((node.get("config") or {}).get("code") or ""))
+            out_problems = port_checks.check_ports(
+                node.get("outputs", []), output, require_all=True,
+                empty_ok=not step_types.empty_list_is_a_warning(node, inputs, looped))
 
             policy = str((node.get("config") or {}).get("on_invalid_items")
                          or "stop")
