@@ -31,8 +31,8 @@
       "kind": "policy",
       "description": "When a message arrives, tell apart a question, a value, feedback on a result and a change, and do only what it asks",
       "depends_on": [],
-      "version": "5.0.0",
-      "last_updated": "2026-10-13",
+      "version": "5.1.0",
+      "last_updated": "2026-10-25",
       "path": "agent/02-a-message-arrives/SKILL.md"
     },
     {
@@ -53,8 +53,8 @@
       "kind": "policy",
       "description": "How to try each step for real, reuse what earlier tries saved, and keep test values apart from saved settings",
       "depends_on": [],
-      "version": "5.1.0",
-      "last_updated": "2026-10-14",
+      "version": "5.3.0",
+      "last_updated": "2026-10-25",
       "path": "agent/04-working-a-step/SKILL.md"
     },
     {
@@ -64,8 +64,8 @@
       "kind": "policy",
       "description": "What to save for later: facts about this workflow, and learnings that hold for other workflows too",
       "depends_on": [],
-      "version": "5.0.0",
-      "last_updated": "2026-10-13",
+      "version": "5.1.0",
+      "last_updated": "2026-10-25",
       "path": "agent/05-what-you-learn/SKILL.md"
     },
     {
@@ -86,8 +86,8 @@
       "kind": "policy",
       "description": "What a plan holds: where one step ends and the next begins, typed inputs and outputs, the lines between steps, checks, and where each value is stored",
       "depends_on": [],
-      "version": "5.2.1",
-      "last_updated": "2026-10-14",
+      "version": "5.4.0",
+      "last_updated": "2026-10-25",
       "path": "agent/07-what-a-plan-contains/SKILL.md"
     },
     {
@@ -158,8 +158,8 @@
       "depends_on": [
         "07-what-a-plan-contains"
       ],
-      "version": "3.0.0",
-      "last_updated": "2026-10-13",
+      "version": "3.1.0",
+      "last_updated": "2026-10-20",
       "path": "agent/63-code-practice/SKILL.md"
     },
     {
@@ -178,10 +178,10 @@
       "group": "connectors",
       "tier": 2,
       "kind": "action",
-      "description": "WHEN a step needs a browser window on a site: how to open pages, read them, scroll lists, check you are on the right page, and reuse what earlier windows saved",
+      "description": "WHEN a step needs a browser window on a site: how to open pages, read them, load whole lists, check you are on the right page, and reuse what earlier windows saved",
       "depends_on": [],
-      "version": "3.2.0",
-      "last_updated": "2026-10-16",
+      "version": "3.4.0",
+      "last_updated": "2026-10-25",
       "path": "connectors/browser/SKILL.md"
     },
     {
@@ -268,8 +268,8 @@
       "kind": "action",
       "description": "WHEN a step reads or writes a Google Sheet: how to choose between an Apps Script web app, the Sheets API with a service account, and the CSV export link",
       "depends_on": [],
-      "version": "2.0.0",
-      "last_updated": "2026-10-13",
+      "version": "2.2.0",
+      "last_updated": "2026-10-25",
       "path": "connectors/google-sheets/SKILL.md"
     },
     {

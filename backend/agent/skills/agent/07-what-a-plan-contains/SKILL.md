@@ -4,8 +4,8 @@ description: What a plan holds: where one step ends and the next begins, typed i
 tier: 2
 kind: policy
 depends_on: []
-version: 5.2.1
-last_updated: 2026-10-14
+version: 5.4.0
+last_updated: 2026-10-25
 ---
 
 # What a plan contains
@@ -41,7 +41,7 @@ Use an AI step when each run needs real interpretation, and code when the rule c
 
 A check states a business rule the task really has, never a value copied from one sample. In a check, use only the step's input and output names, and only the functions the app allows. A failing check stops the run at the step that produced the value. Keep the tests you write specific, and make them cover cases the recorded try does not.
 
-Mark an output, or a field inside it, optional only when the value can really be missing. Every step that reads it must work without it. Required means the workflow cannot do its job without the value; never make an AI step invent a value the source does not have. An empty list can be a complete and correct result, but it never shows that a blocked page was read. Decide on purpose whether an output can be empty: otherwise a try that returned items marks it as one that must not be empty.
+Mark an output, or a field inside it, optional only when the value can really be missing. Every step that reads it must work without it. An input that comes from a step which does not run on every path into the reading step (a step after a condition that the reading step does not share) is missing on the other paths, so mark that input optional and make the step work without it. Required means the workflow cannot do its job without the value; never make an AI step invent a value the source does not have. An empty list can be a complete and correct result, but it never shows that a blocked page was read. Decide on purpose whether an output can be empty: a try that returned items marks it as one that must not be empty, and when an empty list is a normal result for the step (a search that found nothing, a month with no prices), set `may_be_empty: true` on that output in the plan.
 
 Decide from the task whether the run may carry on with only part of the items. An export or a reconciliation that must be complete stops when items are missing. A report where the user accepted partial results says which items are missing and why. A failed item must never be marked as sent. Use the step's `on_invalid_items` setting (`stop`, `proceed` or `log`) to make this explicit.
 
@@ -49,6 +49,7 @@ Decide from the task whether the run may carry on with only part of the items. A
 
 - A choice that is different on every run belongs on a user-input step, and is not saved. Load "07-what-a-plan-contains/choices" when you offer the user options to choose from.
 - A value the user controls and that stays the same between runs (a destination, a sheet tab, a threshold, a folder, a real limit) is a saved setting with a type, stored as soon as the user agrees it. Passing it in a try's inputs does not save it. Use only the types the setting tool supports: a choice or a record cannot be a saved setting.
+- Give a value the type it means, never text the code has to parse: a date or a month is a `date` input, and for a month any day in it stands for the month; an amount or a count is a `number`.
 - A value a step works out belongs on that step's output, connected to the steps that read it, and never in a setting the user has to fill in.
 - API paths, selectors and fixed values of a site's structure belong in the code. Values the user gave belong in settings, not written into the code.
 - A value from an environment attached to this workflow is read by its name, never copied into the workflow. When two environments hold the same name, ask the user which one to use and record their choice.

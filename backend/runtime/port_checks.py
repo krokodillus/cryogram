@@ -95,7 +95,7 @@ def check_ports(ports: list, values: Any, require_all: bool = False,
             continue
         if items or shape.is_structured(sch):
             if require_all and not empty_ok and sch.get("x-nonempty") \
-                    and isinstance(v, list) and not v:
+                    and not p.get("may_be_empty") and isinstance(v, list) and not v:
                 problems.append({"port": name, "type": t,
                                  "empty_output": True,
                                  "problem": f"{field_name(p)} came back "

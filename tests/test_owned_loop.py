@@ -1875,10 +1875,34 @@ class ListCountCheckTest(unittest.TestCase):
         from unittest import mock
         args = {"name": "Collect threads", "code": code, "inputs": {"max_threads": limit}}
         result = {"ok": True, "output": {"threads": [{"n": i} for i in range(found)]}}
-        with mock.patch.object(actions, "_raise_card",
-                               return_value=("i1", {}, answer)) as raised:
+        real = actions._raise_card
+        with mock.patch.object(actions, "_raise_card", side_effect=real) as raised, \
+                mock.patch.object(actions.interactions, "create_sync"), \
+                mock.patch.object(actions, "_wait_for_answer", return_value=answer):
             out = actions._list_count_check(p, args, result)
         return out, raised
+
+    def test_a_typed_answer_is_shown_kept_and_not_asked_again(self):
+        from agent import transcript
+        p = self._wf("p_lc8")
+        out, raised = self._check(p, 27, 31, answer={"text": "yes, some nights sell out",
+                                                     "via": "typed"})
+        items = transcript.items(p)
+        self.assertTrue(any(i.get("kind") == "message" and i.get("from") == "user"
+                            and "some nights sell out" in i.get("text", "") for i in items))
+        self.assertTrue(any(i.get("kind") == "answer" for i in items))
+        out, raised = self._check(p, 27, 31, answer={"text": actions.COUNT_YES})
+        raised.assert_not_called()
+        self.assertIn("already answered about this count: yes, some nights sell out", out["note"])
+
+    def test_a_click_after_the_turn_moved_on_is_kept(self):
+        from agent import reply
+        p = self._wf("p_lc9")
+        self._check(p, 27, 31, answer=None)
+        req = next(i for i in reversed(p["transcript"]) if i.get("kind") == "request")
+        reply.settle_at_rest(p, req, {"text": actions.COUNT_YES, "kind": "click", "cid": "c1"})
+        out, raised = self._check(p, 27, 31, answer=None)
+        raised.assert_not_called()
 
     def test_exactly_the_maximum_gets_a_note_and_no_card(self):
         out, raised = self._check(self._wf("p_lc1"), 5, 5)

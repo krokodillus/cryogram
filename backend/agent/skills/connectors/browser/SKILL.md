@@ -1,11 +1,11 @@
 ---
 name: browser
-description: WHEN a step needs a browser window on a site: how to open pages, read them, scroll lists, check you are on the right page, and reuse what earlier windows saved
+description: WHEN a step needs a browser window on a site: how to open pages, read them, load whole lists, check you are on the right page, and reuse what earlier windows saved
 tier: 2
 kind: action
 depends_on: []
-version: 3.2.0
-last_updated: 2026-10-16
+version: 3.4.0
+last_updated: 2026-10-25
 ---
 
 # Browser work
@@ -36,6 +36,21 @@ One browser step can open many pages if they are the same kind of page, for exam
 
 The browser profile stays signed in between runs, but a site can sign the user out at any time. On a site that needs the user to be signed in, the step's code must check it is signed in before it reads anything.
 
+## Find the quickest way to the data
+
+Read the data the quickest sturdy way, in this order:
+
+1. The data the page loads. Look in the HAR file for a request whose answer holds the data, often as JSON, and read that.
+2. The page's text. Each window saves the page's visible text, what select-all and copy gives, beside its HTML, and a code try reads it with "$recorded:text". When the data sits in the text in a regular pattern, for example a day number, then a price, then the next day number, read it from the text.
+3. Elements found from stable hooks, as the section below describes.
+4. Only when none of these works: a screenshot read by an AI step. The browser step brings the part that holds the data into view, since a screenshot holds only what is on screen, saves `page.screenshot()` with `write_file` as a file output, and the next step is an AI step that reads the image and returns the rows. It adds a model call to every run, so it comes last.
+
+Before writing a loop that clicks once per item, look for one view that shows them all: a month calendar, a table, a list page, a "show all" link or an export. A click in a loop costs seconds for every item on every run, so a view that shows every item at once is worth a window to find.
+
+When the data should be on the page and the saved HTML or text does not show it, try what makes it appear before you decide it is not there: click the date field, open the control, scroll the panel, or wait for it to load. Check across the whole range the user asked for, not only the first items: in a calendar, the days already past and the next few weeks may show no prices while later months do.
+
+When the user says the page shows something your window does not, open the page in a probe try that calls `confirm_with_user`, so the user can look at it in the window and tell you what they see, before you guess at causes such as being signed in or the size of the screen.
+
 ## Collect the content the user asked for
 
 Before reading or scrolling, check that the page you expected has loaded, by looking for an element that only that page has.
@@ -44,25 +59,37 @@ Open a link the user gave you exactly as given, and do not change its query para
 
 Wait for the element that holds the content you need to appear. Do not only wait a fixed number of seconds.
 
-To read a list from a page: count the items, scroll one screen, wait for the page to load, and count again. Stop when two scrolls in a row add no new items, or when you have as many items as the maximum setting. Do this whether or not you think the page loads more when scrolled, and whether or not you know how many items there are. Report the count after each scroll with `heartbeat()`, so a try shows whether the page loaded more.
+A list loads more items in one of three ways: a button such as "Show more", "Load more" or "See more results", links to the next page of results, or scrolling. Before the first window, look for these in any page copy and HAR file an earlier window saved. If there is none yet, write the first try to handle all three in this order: after counting the items, click a load-more button if one is on the page, otherwise follow the link to the next page if there is one, otherwise scroll one screen. Wait for the page to load and count again. After the try, keep the way that loaded more items.
 
-Scroll the way a person does. Many lists scroll inside their own panel, not the whole page, and the mouse wheel scrolls whatever is under the pointer, which starts at the window's top-left corner. Move the pointer to the middle of the element that holds the list (`page.mouse.move`), then turn the wheel (`page.mouse.wheel`), or scroll the last item into view. Never set a scroll position directly: a person cannot do that, and many pages load their next batch only when they are really scrolled.
+To read a list from a page: count the items, load more in the way the page uses, wait, and count again. Stop when two loads in a row add no new items, or when you have as many items as the maximum setting. Do this whether or not you know how many items there are. Report the count after each load with `heartbeat()`, so a try shows whether the page loaded more.
 
-After each scroll, check the count went up. If the first scroll adds nothing, check the list actually moved, and look in the HAR file for the request the page makes to load more, before you decide you have reached the end of the list.
+When the list loads more by scrolling, scroll the way a person does. Many lists scroll inside their own panel, not the whole page, and the mouse wheel scrolls whatever is under the pointer, which starts at the window's top-left corner. Move the pointer to the middle of the element that holds the list (`page.mouse.move`), then turn the wheel (`page.mouse.wheel`), or scroll the last item into view. Never set a scroll position directly: a person cannot do that, and many pages load their next batch only when they are really scrolled.
 
-When you try a step that reads a list from one page, pass a maximum just above the number of items the page shows before any scrolling. The try then shows that the step reads the first items and that scrolling loads more. A real run collects up to the maximum the user set.
+After each load, check the count went up. If the first load adds nothing, check the button was clicked or the list actually moved, and look in the HAR file for the request the page makes to load more, before you decide you have reached the end of the list.
 
-After such a try, the app compares the number of items with the maximum you passed. If the step returned exactly the maximum, you get a note: check that maximum was above the number the page shows before scrolling. If it returned fewer than the maximum, the page gave no more, and the user is asked whether that number is about what they expect. If it returned none at all, you get a note that the step is not reading the list yet.
+When you try a step that reads a list from one page, pass a maximum just above the number of items the page shows before it loads more. The try then shows that the step reads the first items and that the page loads more. A real run collects up to the maximum the user set.
+
+After such a try, the app compares the number of items with the maximum you passed. If the step returned exactly the maximum, you get a note: check that maximum was above the number the page shows before it loads more. If it returned fewer than the maximum, the page gave no more, and the user is asked whether that number is about what they expect. If it returned none at all, you get a note that the step is not reading the list yet.
 
 When you try a step that works through several items (conversations, profiles, rows), first try it on 1 item and check the result has every field the step needs. When that works, try it on 2 items to check the loop. Pass these numbers as the step's maximum setting. Write the loop so the maximum counts every item the step works through, including items that gave nothing, so a try on 2 items never opens more than 2.
 
 For every item, write what happened to it into the step's output: the data the step found, or the reason it found nothing (the item was empty, the profile was private, a sign-in page or captcha appeared, or the element the code looked for was not on the page). A try's result then shows why an item came back empty, and so does the summary of a real run. A real run works through every item and never stops early because some items gave nothing.
 
-Open only the sections and controls the task needs. Use selectors that do not change between page loads, and read several attributes in one call instead of one call per field.
+Open only the sections and controls the task needs, and read several attributes in one call instead of one call per field.
+
+## Find elements by what stays the same
+
+Choose selectors in this order: what a person sees or a screen reader reads (`aria-label`, `role`, the text of a button or a label), then attributes that carry meaning (`data-testid`, `name`, `href`, or a value such as a date in `data-iso`), then a position relative to one of those. Never use a class name or id that the site's build tools generated, a short string of random letters such as `CylAxb` or `ow13`: it changes when the site releases a new version. If only a generated class finds the data, read the data from inside the nearest stable element instead.
+
+When the data has no stable hook of its own, start from the nearest stable element above it, find the unit that repeats inside it (one cell per day, one card per person, one row per order), and read each unit's parts by their order and by what they look like: a day number, an amount with a currency symbol, a name. Never use exact depth or child numbers such as `div:nth-child(3) > div:nth-child(3)`, which is what an element path copied from the browser's developer tools gives: one wrapping element added by the site moves every position.
+
+Check on every run that the pattern still holds, and stop with `unexpected_input` when it does not, saying what the step expected. For example, check that every calendar cell read has a day and a price or a sold-out mark, and that the number of days matches the month. A changed page then stops the run with a clear message instead of writing half-empty rows.
+
+Above each selector in the step's code, write a one-line comment saying what it finds and the stable element it is read from, for example `# prices: the text after the day number in each [data-iso] cell of the check-in calendar`. When the site changes and a run fails, the fix starts from that comment.
 
 ## When to stop
 
-Stop collecting when you have what the user asked for (never more than the maximum setting), when you have reached the end of the list and checked it is the end, when two scrolls in a row add no new items, or when a time limit you set runs out with nothing new. Do not keep scrolling to reach a number, and do not keep going after you have enough items just to show there are no more.
+A loop that collects a list stops in one of three ways only: when it has as many items as the maximum setting, when it has reached the end of the list and checked it is the end, or when two loads in a row add no new items. Never stop it after a number of rounds or a number of seconds written into the code: the run stops short of what the user asked for and says nothing. The app stops a step that reports no progress for 120 seconds, so a loop that calls `heartbeat()` after each load never needs a clock. Do not keep loading to reach a number, and do not keep going after you have enough items just to show there are no more.
 
 If the list stops growing before it reaches the maximum, do not assume it is complete: look in the HAR file for the request the page makes to load more.
 
@@ -78,9 +105,9 @@ An empty result is valid when the page shows its own message for having nothing,
 
 Questions about page structure should be answered from data already collected. Only open a new window if the live page is needed or data is missing (such as what happens on a click, scroll, fresh load etc.).
 
-Each window during the build saves three files, numbered by window: the HAR file (every request and response), the page's HTML, and a list of every request the page made. The try's result names them under `$capture`. Read them before you open another window.
+Each window during the build saves four files, numbered by window: the HAR file (every request and response), the page's HTML, the page's visible text, and a list of every request the page made. The try's result names them under `$capture`. Read them before you open another window.
 
-To work out how to read the data, write a code try that opens no window: pass "$recorded:page" or "$recorded:har" as one of its inputs (add `#2` to use window 2's files, for example "$recorded:page#2"), read it with `read_input`, and change the reading code until it works. If you need several attempts to read the data correctly, make them in code tries like this, not by opening the site again each time. The same applies when you change a browser step that already works: if the change is only to how it reads what the page returned (an id comparison, a regular expression, which keys hold the next batch), try the new reading code in a code try on the last window's files first, and run the browser step again once, at the end, to confirm it on the live page.
+To work out how to read the data, write a code try that opens no window: pass "$recorded:page", "$recorded:text" or "$recorded:har" as one of its inputs (add `#2` to use window 2's files, for example "$recorded:page#2"), read it with `read_input`, and change the reading code until it works. If you need several attempts to read the data correctly, make them in code tries like this, not by opening the site again each time. The same applies when you change a browser step that already works: if the change is only to how it reads what the page returned (an id comparison, a regular expression, which keys hold the next batch), try the new reading code in a code try on the last window's files first, and run the browser step again once, at the end, to confirm it on the live page.
 
 Reading that needs the live page, for example content that only appears after a click, stays in the browser step. A browser try does not have to return only raw HTML, and one window does not have to answer every later question.
 

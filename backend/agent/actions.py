@@ -88,7 +88,8 @@ def _internal_words(text: str) -> list[str]:
 
 # Every card that pauses the turn is raised one way: the narration so far lands as a message above it, the card is appended as rendered and saved, the interaction is registered under the card's own id, and the turn waits for the answer
 def _raise_card(workflow: dict, request_kind: str, payload: dict,
-                interaction_kind: str, interaction_payload: dict, prefix: str):
+                interaction_kind: str, interaction_payload: dict, prefix: str,
+                settles_itself: bool = False):
     import turns as _turns
 
     if interactions.pending(workflow.get("id")):
@@ -111,6 +112,11 @@ def _raise_card(workflow: dict, request_kind: str, payload: dict,
     got = _wait_for_answer(workflow, iid)
     if got is not None:
         _loop.resumed(workflow.get("id") or "")
+        if not settles_itself:
+            from agent import reply as _reply
+            done = _reply.settle(workflow, entry, got)
+            steps.save(workflow)
+            got = {"text": done["text"], "via": "click" if done["clicked"] else "typed"}
     return iid, entry, got
 
 def _ask_user_owned(workflow: dict, emit, args: dict) -> dict:
@@ -172,7 +178,7 @@ def _ask_user_owned(workflow: dict, emit, args: dict) -> dict:
 
     iid, entry, got = _raise_card(workflow, "ask", payload, "ask",
                                   {"question": question, "secret": secret,
-                                   "options": options}, "ask")
+                                   "options": options}, "ask", settles_itself=True)
     if got is not None:
         return _ask_answered(workflow, emit, entry, got)
 
@@ -197,7 +203,7 @@ def _opening_card_owned(workflow: dict, emit) -> dict:
                **({"fix": fix_id} if fix_id else {})}
     iid, entry, got = _raise_card(workflow, "blueprint", payload, "ask",
                                   {"question": plan.get("summary", ""),
-                                   "options": [PLAN_OK_LABEL]}, "blu")
+                                   "options": [PLAN_OK_LABEL]}, "blu", settles_itself=True)
     if got is None:
         turnstate.of(workflow).ask_open = True
         return {"plan_shown": "waiting"}
@@ -304,7 +310,7 @@ def _list_count_check(workflow: dict, args: dict, result: dict) -> dict:
     sname = step.get("name") or args.get("name")
     if found >= limit:
         note = (f"it returned exactly the maximum it was passed ({limit} {what}): if that "
-                "is not above what the page shows before any scrolling, this try never showed the page loading more - try again with a maximum above the first screen's count")
+                "is not above what the page shows before it loads more, this try never showed the page loading more - try again with a maximum above that first count")
         return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
     if found == 0:
         note = (f"it found no {what} at all: the step is not reading the list yet - check "
@@ -320,12 +326,22 @@ def _list_count_check(workflow: dict, args: dict, result: dict) -> dict:
         note = (f"it still found {found} {what}, the count the person already said is too "
                 "low: the step is not reading more of the list yet - work out how the page loads more before trying again")
         return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
+
+    said = next((g for g in reversed(workflow.get("approval_grants") or [])
+                 if g.get("kind") == "list-count-said" and g.get("step") == sid), None)
+    if said and said.get("count") == found:
+        note = (f"it found {found} {what} again; the person already answered about this "
+                f"count: {said.get('said') or ''}")
+        return {**result, "note": " ".join(x for x in (result.get("note"), note) if x)}
     question = (f'"{sname}" found {found} {what}, fewer than the {limit} it was allowed '
                 "to collect, so the page showed no more than that. Is that about how many you expect?")
     options = [COUNT_YES, COUNT_NO]
+
     iid, entry, answer = _raise_card(
         workflow, "ask", {"question": question, "options": options, "secret": False,
-                          "secret_name": "", "upload": False, "folder": False},
+                          "secret_name": "", "upload": False, "folder": False,
+                          "count": {"step": sid, "found": found,
+                                    "yes": COUNT_YES, "no": COUNT_NO}},
         "ask", {"question": question, "options": options}, "ask")
     if answer is None:
         turnstate.of(workflow).ask_open = True
@@ -333,16 +349,10 @@ def _list_count_check(workflow: dict, args: dict, result: dict) -> dict:
                 "the person is asked whether this count is right") if x)}
     text = str(answer.get("text") if isinstance(answer, dict) else answer or "").strip()
     if text == COUNT_YES:
-        workflow.setdefault("approval_grants", []).append(
-            {"kind": "list-count", "step": sid, "count": found, "ts": _time.time()})
-        steps.save(workflow)
         said = f"the person confirmed {found} {what} is about what they expect"
     elif text == COUNT_NO:
-        workflow.setdefault("approval_grants", []).append(
-            {"kind": "list-count-no", "step": sid, "count": found, "ts": _time.time()})
-        steps.save(workflow)
         said = (f"the person expects more than {found} {what}: the page did not load more "
-                "while this step ran - work out how it loads more (scroll the list as a person does, and look in the recording for the request the page makes for its next batch) and try the step again")
+                "while this step ran - work out how it loads more (a load-more button, a link to the next page, or scrolling the list as a person does, and the request the page makes for its next batch in the recording) and try the step again")
     else:
         said = f"the person answered about the count of {found} {what}: {text}"
     return {**result, "note": " ".join(x for x in (result.get("note"), said) if x)}
@@ -390,7 +400,8 @@ def _approve(workflow: dict, emit, title: str, detail: str, scope: str,
          **({"step_id": step_id} if step_id else {}),
          **({"holds": holds} if holds else {}),
          **({"domain": domain} if domain else {})},
-        "approval", {"title": title, "detail": detail, "scope": scope}, "int")
+        "approval", {"title": title, "detail": detail, "scope": scope}, "int",
+        settles_itself=True)
 
     cid = str(got.get("cid") or "") if isinstance(got, dict) else ""
     decision = str(got.get("text") or "") if isinstance(got, dict) else got
@@ -748,7 +759,12 @@ def execute(workflow: dict, action: dict, emit, engine: str = "") -> dict:
         if rid is not None:
             out = {**out, "result_id": rid}
         if key:
-            out = {**out, key: previews.guard(out[key], engine)}
+            img = out[key].get("image") if isinstance(out[key], dict) else None
+            if isinstance(img, dict) and img.get("data"):
+                rest = previews.guard({k: v for k, v in out[key].items() if k != "image"}, engine)
+                out = {**out, key: {**rest, "image": img}}
+            else:
+                out = {**out, key: previews.guard(out[key], engine)}
 
     if emit:
         emit({"type": "thinking"})

@@ -1068,6 +1068,8 @@ class WhatTheWindowSawTest(unittest.TestCase):
                         "elements": 1240, "links": 38}
             if "scrollHeight" in js:
                 return self.height
+            if "innerText" in js:
+                return "1\n£121\n2\n£124"
             return "<!DOCTYPE html><html><title>T</title></html>"
 
     def setUp(self):
@@ -1085,6 +1087,18 @@ class WhatTheWindowSawTest(unittest.TestCase):
         self.assertEqual((kept["seen"], kept["height"]), (900, 4200))
         self.assertEqual(kept["links"], 38)
         self.assertGreater(kept["bytes"], 0)
+
+    def test_a_copy_keeps_the_pages_text_beside_its_html(self):
+        from runtime import capability, _sandbox_runner
+        from agent import cells
+        from storage import blobstore
+        capability.snapshot_page(self.Shaped())
+        with open(capability.kept_snapshots()[-1]["text_path"]) as f:
+            self.assertEqual(f.read(), "1\n£121\n2\n£124")
+        cap = _sandbox_runner._stored_captures()
+        self.assertTrue(cap.get("text"))
+        ref = cells.capture_refs({"$capture": cap})["text"]
+        self.assertEqual(blobstore.get(ref).decode(), "1\n£121\n2\n£124")
 
     def test_a_page_that_cannot_be_measured_is_still_kept(self):
         from runtime import capability

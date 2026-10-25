@@ -4,8 +4,8 @@ description: WHEN you design or fix a code step: work on this computer that give
 tier: 2
 kind: action
 depends_on: [07-what-a-plan-contains]
-version: 3.0.0
-last_updated: 2026-10-13
+version: 3.1.0
+last_updated: 2026-10-20
 ---
 
 # Code steps
@@ -40,6 +40,6 @@ A check uses the step's input and output names, and the keys of a record, writte
 
 ## Time limits
 
-A step that reports no progress for 120 seconds is stopped, in a try and in a run alike. Call `heartbeat()` with real progress during long work. A call that can block for a long time needs a time limit you can explain. A heartbeat must never keep a stuck operation alive for ever.
+A step that reports no progress for 120 seconds is stopped, in a try and in a run alike. Call `heartbeat()` with real progress during long work. A call that can block for a long time needs a time limit you can explain. A heartbeat must never keep a stuck operation alive for ever. A loop that collects a list ends only at its maximum setting, at the end of the list, or after two loads in a row that add nothing, and never after a number of rounds or seconds written into the code.
 
 A step can use its own temporary folder and the folders the user approved, and nothing else on the disk, including the app's own storage. When a run needs a value or a decision from the user, the app pauses with its own forms and cards; never build a conversation with the user into the code.

@@ -1291,6 +1291,19 @@ class ToolSurfaceTruthTest(unittest.TestCase):
         self.assertEqual(base64.b64decode(r["image"]["data"]), png)
         self.assertNotIn("path", r)
 
+    def test_a_large_image_reaches_the_engine_whole(self):
+        from agent import actions, previews
+        from storage import blobstore, store
+        import base64, os
+        png = b"\x89PNG\r\n\x1a\n" + os.urandom(previews.INLINE_CHARS["claude"])
+        ref = blobstore.put(png, mime="image/png", meta={"name": "big.png"}, owner=blobstore.OWNER_APP)
+        p = _workflow([], pid="p_img2")
+        p["samples"] = [{"name": "big.png", "ref": ref, "mime": "image/png", "size": len(png)}]
+        store.save(p)
+        out = actions.execute(p, {"name": "read_sample", "input": {"name": "big.png"}}, None,
+                              engine="claude")
+        self.assertEqual(base64.b64decode(out["data"]["image"]["data"]), png)
+
     def test_binary_sample_names_the_cell_route(self):
         from storage import blobstore
         ref = blobstore.put(b"PK\x03\x04 fake zip", mime="application/zip",
@@ -4792,7 +4805,7 @@ class EveryYesRidesTheLoopTest(unittest.TestCase):
                                  "code_key": "k1", "always": False, "ts": 1.0}]
         raised = []
 
-        def fake_raise(workflow, request_kind, payload, ikind, ipayload, prefix):
+        def fake_raise(workflow, request_kind, payload, ikind, ipayload, prefix, **kw):
             raised.append(payload.get("title"))
             return "iid", {}, {"text": "allow"}
         with mock.patch.object(actions, "_raise_card", fake_raise), \
@@ -5140,6 +5153,14 @@ class TheBasicWaysOfWorkingTest(unittest.TestCase):
         self.assertIn("own code", r.get("note", ""))
 
         self.assertTrue(node_tools.tool_run_cell(p, "Parse the page", "", {"limit": 2}).get("duplicate"))
+
+    def test_a_try_with_no_code_runs_the_newest_tried_code_not_the_plans(self):
+        p = self._planned("p_bw_newest")
+        p["plan"]["nodes"][0]["code"] = "write_output('rows', ['old'])"
+        new = "write_output('rows', ['new', read_input('limit')])"
+        self.assertTrue(node_tools.tool_run_cell(p, "Parse the page", new, {"limit": 1}).get("ok"))
+        r = node_tools.tool_run_cell(p, "Parse the page", "", {"limit": 2})
+        self.assertEqual(r["output"]["rows"], ["new", 2], r)
 
     def test_the_build_counts_a_try_made_after_the_save(self):
         p = self._planned("p_bw_fresh")

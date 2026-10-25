@@ -4,8 +4,8 @@ description: How to try each step for real, reuse what earlier tries saved, and 
 tier: 2
 kind: policy
 depends_on: []
-version: 5.1.0
-last_updated: 2026-10-14
+version: 5.3.0
+last_updated: 2026-10-25
 ---
 
 # Working on a step
@@ -18,13 +18,15 @@ A step's inputs and outputs are checked against their declared types. When a val
 
 Look at the sample first. Decide what you do not know yet, and run the smallest try that answers it. A try that reads from outside, or sends something the user approved, uses a small sample that is typical of the real data, usually one or two items. A step that only transforms data on this computer may use all of its input. When a step has a maximum setting, pass a smaller number in the try's inputs, and leave the stored setting as it is.
 
-A browser step that reads a list from one page is tried on what the page shows first plus one more batch of what it loads on scrolling, by passing a maximum just above the number of items the page shows before scrolling. A step that works through several items is tried on 1 item first, and then on 2 to check the loop. The browser guide says more about both.
+A browser step that reads a list from one page is tried on what the page shows first plus one more batch of what it loads next (by a load-more button, the next page or scrolling), by passing a maximum just above the number of items the page shows before it loads more. A step that works through several items is tried on 1 item first, and then on 2 to check the loop. The browser guide says more about both.
 
 Use the current guide for the service before you search the web, and load it if it was not given to you. Search the service's official documentation for details the guide does not have, that look out of date, or that do not match what you see. Load the browser guide only for a browser route the user agreed to, never to get round a refusal.
 
 A try is judged exactly as a run is: its inputs and outputs pass the run's own checks. Read inputs by their names from the first try. A step's purpose decides its declared outputs and their types, and the code exists to produce them. So write the `write_output` lines first, one for each declared output, with exactly its name and in its declared type, and then write the code that fills them. Keep values you only want to look at out of the declared outputs: extra keys never become part of an output. A file the step makes is written with `write_file`, and its reference goes on a file output; check what is in the file, not only that it exists. Keep secrets, and sample data that has nothing to do with the output, out of every output. In a connector or browser step, a loop that waits on a page or a service calls `heartbeat()` on every round, or a run stops it for looking stuck; a try whose loop has none is refused with the rest of the code check.
 
 You can send several tries that do not depend on each other in one call. Never send something real to a service in the same call as tries that only look at things. A step the user approved to send one thing per item is one step with that purpose, not permission to send anything else. Reuse samples, recordings and the guides you already have in full. Read something again only when part of it is missing, was cut short, or has changed. Never fetch a page again only to read it a different way: read the saved copy.
+
+When the way you found to get the data covers only part of what the user asked for, for example prices only for months more than a few weeks ahead, or only the first page of results, cover the rest too, with a second way for the part the first one misses, or ask the user whether that part matters. Never decide for them that the part it misses is fine.
 
 Give every wait an end, and stop as soon as the result answers your question. Read the workflow's models, samples and current plan from what the app already gave you; do not run a try to find them out.
 

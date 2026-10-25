@@ -238,6 +238,14 @@ class DerivationTest(unittest.TestCase):
         node_tools.derive_port_schema(quiet, POSTS)
         self.assertNotIn("x-nonempty", quiet["schema"])
 
+    def test_may_be_empty_holds_before_the_schema_is_derived_again(self):
+        from agent import node_tools
+        port = {"name": "posts", "type": "list"}
+        node_tools.derive_port_schema(port, POSTS)
+        self.assertTrue(port_checks.check_ports([port], {"posts": []}, require_all=True))
+        port["may_be_empty"] = True
+        self.assertEqual(port_checks.check_ports([port], {"posts": []}, require_all=True), [])
+
     def test_empty_output_flags_at_the_producer_only(self):
         port = {"name": "posts", "type": "any"}
         from agent import node_tools

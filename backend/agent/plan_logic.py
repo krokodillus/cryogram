@@ -407,6 +407,14 @@ def check(workflow: dict, plan: dict) -> dict:
                 f"from a setting (for example max_{name}) and never has the number "
                 "written in; while building, pass 2 for that setting in the cell's inputs")
 
+        if str(n.get("max_setting") or "").strip():
+            for kind, number, line in _gate.fixed_loop_bounds(code):
+                bound = (f"after {number:g} rounds" if kind == "rounds"
+                         else f"after {number:g} seconds")
+                findings.append(
+                    f'step "{n.get("name")}" stops its loop {bound} (line {line}), a '
+                    f"number written into the code - {LIST_LOOP_ENDS}")
+
         proven = False
         try:
             from agent import cells as _cells
@@ -535,10 +543,13 @@ def check(workflow: dict, plan: dict) -> dict:
     findings += _lines_between_unrelated_steps(plan, workflow, node_by_name)
     findings += _repeated_siblings(plan, plan_by_name, incoming)
     findings += _unplaced_steps(plan, plan_by_name)
+    findings += _conditions_bypassed(plan)
+    findings += _inputs_from_steps_that_may_not_run(workflow, plan)
     findings += _ai_echoes_its_input(workflow["id"], plan_by_name)
     findings += _dead_pathways(workflow, plan, node_by_name, plan_names,
                                id_to_name, existing_names)
     findings += _environment_copies(workflow, plan_nodes)
+    findings += _user_values_in_code(workflow, plan_nodes)
 
     return {"ok": not findings, "findings": findings,
             "settings": sorted(set(settings))}
@@ -577,6 +588,50 @@ def _environment_copies(workflow: dict, plan_nodes: list) -> list[str]:
                 out.append(f'the setting "{v.get("name")}" holds a copy of environment '
                            f'"{env_name}"\'s {var_name} - the environment supplies that '
                            "value by name; ask the user, then remove the workflow's own copy (remove_variables, confirmed:true)")
+                break
+    return out
+
+_LINK = re.compile(r"https?://[^\s<>\"'()\[\]]+")
+
+# The parts of a value the user gave that name one thing of theirs: a typed value with a digit, or a link's id-like parts
+def _value_parts(value: str) -> list[str]:
+    from urllib.parse import urlsplit, parse_qsl
+    value = str(value or "").strip().rstrip(".,;:!?")
+    if not value:
+        return []
+    if _LINK.fullmatch(value):
+        u = urlsplit(value)
+        parts = [p for p in u.path.split("/") if p]
+        parts += [v for _, v in parse_qsl(u.query)]
+        parts += [p for p in u.fragment.split("/") if p]
+    else:
+        parts = [value]
+    return [p for p in parts if len(p) >= ENV_VALUE_MIN and any(c.isdigit() for c in p)]
+
+# A value the user gave on a card or a link in their messages, written into a step's code, is a design gap; the value is never quoted
+def _user_values_in_code(workflow: dict, plan_nodes: list) -> list[str]:
+    from agent import transcript
+    given: list[tuple[str, str]] = []
+    for it in transcript.items(workflow):
+        if it.get("kind") == "answer" and isinstance(it.get("shown"), dict):
+            for field, value in it["shown"].items():
+                for part in _value_parts(value):
+                    given.append((f'the value the user gave for "{field}"', part))
+        elif it.get("kind") == "message" and it.get("from") == "user":
+            for link in _LINK.findall(str(it.get("text") or "")):
+                for part in _value_parts(link):
+                    given.append(("a link in the user's message", part))
+    if not given:
+        return []
+    out: list[str] = []
+    for n in plan_nodes:
+        code = str(n.get("code") or "")
+        if not code:
+            continue
+        for source, part in given:
+            if part in code:
+                out.append(f'step "{n.get("name")}" has {source} written into its code - '
+                           "store it as a setting (declare_variables), add it to the step's inputs and read it with read_input, so the user can change it on the Inputs tab")
                 break
     return out
 
@@ -630,6 +685,91 @@ def _reachability(plan: dict, plan_by_name: dict, incoming: dict,
             out.append(f'nothing runs the "{nm}" step - no step comes before '
                        f"it, and it needs {', '.join(sorted(needs))} from "
                        "one. Put it after the step that produces what it reads, or make it a starting step")
+    return out
+
+# The steps that run on every run: a starting step, or one with a plain line from a step that does
+def _steps_on_every_run(names: list, edges: list) -> set:
+    into: dict = {}
+    for e in edges:
+        if e.get("src") and e.get("dst"):
+            into.setdefault(str(e["dst"]), []).append(e)
+    memo: dict = {}
+
+    def every_run(step: str, seen=()) -> bool:
+        if step in memo:
+            return memo[step]
+        if step in seen:
+            return False
+        ins = into.get(step) or []
+        got = not ins or any(not str(e.get("when") or "").strip()
+                             and every_run(str(e["src"]), seen + (step,)) for e in ins)
+        memo[step] = got
+        return got
+    return {n for n in names if every_run(n)}
+
+# A step that reads a value only steps it can run without produce, and the input is not optional: on that path the run stops
+def _inputs_from_steps_that_may_not_run(workflow: dict, plan: dict) -> list[str]:
+    nodes = [n for n in plan.get("nodes") or [] if n.get("name")]
+    if len(nodes) < 2:
+        return []
+    names = [str(n["name"]) for n in nodes]
+    lines = [(str(e["src"]), str(e["dst"])) for e in plan.get("edges") or []
+             if e.get("src") and e.get("dst")]
+    stored = {str(v.get("name")) for v in workflow.get("variables") or []}
+    for env in environments.attached(workflow):
+        stored |= {str(v.get("name")) for v in env.get("variables") or []}
+    starts = [n for n in names if not any(d == n for _, d in lines)]
+    always = _steps_on_every_run(names, plan.get("edges") or [])
+
+    def reached(target: str, without: set) -> bool:
+        seen, todo = set(), [s for s in starts if s not in without]
+        while todo:
+            cur = todo.pop()
+            if cur == target:
+                return True
+            if cur in seen:
+                continue
+            seen.add(cur)
+            todo += [d for s, d in lines if s == cur and d not in without]
+        return False
+
+    out = []
+    for n in nodes:
+        nm = str(n["name"])
+        for port in n.get("inputs") or []:
+            pname = str(port.get("name") or "")
+            if not pname or port.get("optional") or pname in stored:
+                continue
+            producers = {str(m["name"]) for m in nodes if str(m["name"]) != nm
+                         and any(o.get("name") == pname for o in m.get("outputs") or [])}
+
+            if producers and not (producers & always) and reached(nm, producers):
+                src = sorted(producers)[0]
+                out.append(f'step "{nm}" reads "{pname}" from "{src}", but it also runs on a '
+                           f'path where "{src}" does not run, so there "{pname}" is missing and '
+                           f'the run stops - mark the input "{pname}" optional on "{nm}" and make '
+                           "its code work without it")
+    return out
+
+# A step with a conditioned line into it and a plain line from a step that runs on every run: the condition decides nothing
+def _conditions_bypassed(plan: dict) -> list[str]:
+    lines = [e for e in plan.get("edges") or [] if e.get("src") and e.get("dst")]
+    into: dict = {}
+    for e in lines:
+        into.setdefault(str(e["dst"]), []).append(e)
+    names = sorted({str(e["src"]) for e in lines} | set(into))
+    always = _steps_on_every_run(names, lines)
+
+    out = []
+    for dst, ins in into.items():
+        conditioned = [e for e in ins if str(e.get("when") or "").strip()]
+        plain = [e for e in ins if not str(e.get("when") or "").strip()
+                 and str(e["src"]) in always]
+        if conditioned and plain:
+            out.append(f'the "{dst}" step has the condition "{conditioned[0]["when"]}" on its '
+                       f'line from "{conditioned[0]["src"]}", but also a line with no condition '
+                       f'from "{plain[0]["src"]}", which runs on every run, so the step always '
+                       "runs and the condition decides nothing - put the condition on that line too, or draw that line into an earlier step")
     return out
 
 # In a plan that declares any order, a step no edge touches is a gap: from its own perspective, what comes next
@@ -931,11 +1071,17 @@ def _one_kind_of_work(plan_nodes: list) -> list[str]:
             out.append(f'the "{nm}" step asks the person at the machine to do '
                        "something (confirm_with_user), which only a browser step can - it is the window on their screen that makes that possible. A value the run lacks pauses with its own form, a choice partway is a user-input step, and a send is fronted by its approval")
         sig = _gate.work_signature(code)
-        services = list(sig["services"])
+
+        literal = list(sig["services"]) if (sig["http_client"] or sig["browser"]) else []
+        declared: list = []
         for d in n.get("domains") or []:
             svc = _gate._service_of(str(d))
-            if svc not in services:
-                services.append(svc)
+            if svc not in declared:
+                declared.append(svc)
+        if declared and step_types.may(step_type(n), "app"):
+            services = declared
+        else:
+            services = literal + [s for s in declared if s not in literal]
 
         mismatch = step_types.function(step_type(n), "work_mismatch")
         if mismatch:
@@ -956,6 +1102,8 @@ def _called_names(code: str) -> set:
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
             out.add(n.func.id)
     return out
+
+LIST_LOOP_ENDS = ("a loop that collects a list ends only at the maximum setting, at the end of the list, or after two loads in a row that add nothing; the app stops a step that stops reporting progress, so no count of rounds or clock is needed")
 
 MAX_SETTING_NEEDED = ("collects a list - name the setting that holds its maximum number of records as max_setting: one of the step's number inputs, set to the number the user gave when asked once how many records they want")
 

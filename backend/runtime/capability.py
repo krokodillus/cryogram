@@ -752,16 +752,35 @@ def snapshot_page(page) -> str:
     with diskguard.harness():
         with open(path, "w") as f:
             f.write(html)
-    keep.append({"url": _page_url(page), "path": path,
-                 "bytes": len(html.encode("utf-8")), **_page_shape(page)})
+    entry = {"url": _page_url(page), "path": path,
+             "bytes": len(html.encode("utf-8")), **_page_shape(page)}
+
+    text = _page_text(page)
+    if text:
+        text_path = str(_scratch_dir() / f"page-{len(keep) + 1}.txt")
+        with diskguard.harness():
+            with open(text_path, "w") as f:
+                f.write(text)
+        entry["text_path"] = text_path
+    keep.append(entry)
     for old in keep[:-SNAPSHOTS_KEPT]:
-        try:
-            with diskguard.harness():
-                os.remove(old["path"])
-        except OSError:
-            pass
+        for k in ("path", "text_path"):
+            try:
+                if old.get(k):
+                    with diskguard.harness():
+                        os.remove(old[k])
+            except OSError:
+                pass
     del keep[:-SNAPSHOTS_KEPT]
     return path
+
+# The page's visible text, as select-all and copy gives it; empty when it cannot be read
+def _page_text(page) -> str:
+    try:
+        got = page.evaluate("() => document.body ? document.body.innerText : ''")
+        return got if isinstance(got, str) else ""
+    except Exception:
+        return ""
 
 # How much of the page this copy actually holds, so a half-loaded list is visible rather than assumed
 _SHAPE_JS = """() => ({

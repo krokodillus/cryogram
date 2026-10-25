@@ -224,6 +224,12 @@ def _store_snapshots() -> list:
         for k in ("bytes", "seen", "height", "elements", "links"):
             if snap.get(k) is not None:
                 entry[k] = snap[k]
+        if snap.get("text_path"):
+            try:
+                with open(snap["text_path"], "rb") as f:
+                    entry["text_ref"] = capability.write_file("page.txt", f.read())
+            except Exception:
+                pass
         out.append(entry)
     return out
 
@@ -237,6 +243,8 @@ def _stored_captures() -> dict:
     if pages:
         cap["pages"] = pages
         cap["snapshot"] = pages[-1]["ref"]
+        if pages[-1].get("text_ref"):
+            cap["text"] = pages[-1]["text_ref"]
     seen = capability.browser_calls()
     if seen["total"]:
         cap.update(_listed_calls(seen))

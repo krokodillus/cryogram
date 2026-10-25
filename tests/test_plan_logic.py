@@ -194,6 +194,101 @@ class EveryListHasAMaximumTest(unittest.TestCase):
         code = self._step(type="code")
         self.assertEqual(plan_logic._max_setting_findings([code]), [])
 
+class AListsLoopHasThreeEndsTest(unittest.TestCase):
+    HEAD = ("import time\nn = read_input('max_people')\npeople = []\n")
+    TAIL = "write_output('people', people)\n"
+
+    def _gaps(self, body, max_setting="max_people"):
+        step = {"name": "Collect people", "type": "browser", "read_only": True,
+                "url": "https://example.com/", "max_setting": max_setting,
+                "inputs": [{"name": "max_people", "type": "number"}],
+                "outputs": [{"name": "people", "type": "list"}],
+                "code": self.HEAD + body + self.TAIL}
+        r = plan_logic.check(_proj(), _plan([step]))
+        return [f for f in r["findings"] if "number written into the code" in f]
+
+    def test_a_count_of_rounds_is_a_gap(self):
+        gaps = self._gaps("for round_i in range(15):\n"
+                          "    if len(people) >= n:\n"
+                          "        break\n"
+                          "    people.append(1)\n")
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("after 15 rounds", gaps[0])
+        self.assertIn(plan_logic.LIST_LOOP_ENDS, gaps[0])
+
+    def test_a_clock_is_a_gap_however_it_is_written(self):
+        limit = self._gaps("start = time.monotonic()\n"
+                           "limit = 600\n"
+                           "while True:\n"
+                           "    if time.monotonic() - start > limit:\n"
+                           "        break\n")
+        deadline = self._gaps("deadline = time.monotonic() + 600\n"
+                              "while time.monotonic() < deadline:\n"
+                              "    people.append(1)\n")
+        self.assertIn("after 600 seconds", limit[0])
+        self.assertIn("after 600 seconds", deadline[0])
+
+    def test_the_three_ends_and_a_retry_pass(self):
+        ends = ("no_growth = 0\n"
+                "while len(people) < n:\n"
+                "    before = len(people)\n"
+                "    people.append(1)\n"
+                "    no_growth = no_growth + 1 if len(people) == before else 0\n"
+                "    if no_growth >= 2:\n"
+                "        break\n")
+        retry = ("for attempt in range(3):\n"
+                 "    try:\n"
+                 "        people.append(1)\n"
+                 "        break\n"
+                 "    except Exception:\n"
+                 "        time.sleep(1)\n")
+        self.assertEqual(self._gaps(ends), [])
+        self.assertEqual(self._gaps(retry), [])
+
+    def test_a_step_that_collects_no_list_is_not_checked(self):
+        self.assertEqual(self._gaps("for i in range(15):\n    break\n", max_setting=""), [])
+
+class WhatTheUserGaveIsASettingTest(unittest.TestCase):
+    SHEET = "https://docs.google.com/spreadsheets/d/1rcNnxFdCfTDcGsChXliArKT0iutHgcQYv6trHWcDbGY/edit?usp=sharing"
+    SHEET_ID = "1rcNnxFdCfTDcGsChXliArKT0iutHgcQYv6trHWcDbGY"
+
+    def _gaps(self, code, transcript):
+        step = _code("Append rows", inputs=["rows"], outputs=["result"])
+        step["code"] = code
+        r = plan_logic.check(_proj(transcript=transcript), _plan([step]))
+        return [f for f in r["findings"] if "written into its code" in f]
+
+    def _card(self, **answers):
+        return [{"seq": 1, "kind": "answer", "to": "ask_1", "text": "x", "shown": answers}]
+
+    def test_a_card_answer_in_the_code_is_a_gap_and_is_not_quoted(self):
+        code = (f"rows = read_input('rows')\nsheet_id = '{self.SHEET_ID}'\n"
+                "write_output('result', 'ok')")
+        gaps = self._gaps(code, self._card(google_sheet_url=self.SHEET))
+        self.assertEqual(len(gaps), 1)
+        self.assertIn('"google_sheet_url"', gaps[0])
+        self.assertNotIn(self.SHEET_ID, gaps[0])
+
+    def test_a_link_in_a_message_counts_and_a_site_address_does_not(self):
+        said = [{"seq": 1, "kind": "message", "from": "user",
+                 "text": f"put them in {self.SHEET}. The site is https://www.linkedin.com/company/nyetimber/."}]
+        with_id = f"rows = read_input('rows')\nsid = '{self.SHEET_ID}'\nwrite_output('result', 'ok')"
+        with_site = ("rows = read_input('rows')\n"
+                     "u = 'https://www.linkedin.com/company/nyetimber/'\n"
+                     "write_output('result', 'ok')")
+        self.assertEqual(len(self._gaps(with_id, said)), 1)
+        self.assertEqual(self._gaps(with_site, said), [])
+
+    def test_a_value_read_from_a_setting_passes(self):
+        code = ("rows = read_input('rows')\n"
+                "url = read_input('google_sheet_url')\n"
+                "write_output('result', 'ok')")
+        self.assertEqual(self._gaps(code, self._card(google_sheet_url=self.SHEET)), [])
+
+    def test_short_and_wordy_answers_are_not_looked_for(self):
+        code = "rows = read_input('rows')\nn = 1000\nwrite_output('result', 'Leads tab')"
+        self.assertEqual(self._gaps(code, self._card(max_people="1000", tab="Leads tab")), [])
+
 class CodeStepDomainsTest(unittest.TestCase):
     def test_code_step_with_domains_is_a_gap(self):
         step = _code("fetch it", outputs=["rows"])
@@ -1181,6 +1276,24 @@ class OneKindOfWorkTest(unittest.TestCase):
         gaps = self._gaps(self._step("write_output('html', ai_call('p', {}))", "code"))
         self.assertTrue(any("ai_call" in g for g in gaps), gaps)
 
+    def test_an_address_only_parsed_is_not_reached(self):
+        parse = ("import re\n"
+                 "link = read_input('rows')\n"
+                 "m = re.search(r'https://docs.google.com/spreadsheets/d/([^/]+)', link)\n"
+                 "write_output('html', m.group(1))\n")
+        self.assertEqual(self._gaps(self._step(parse, "code")), [])
+        sheets = self.SHEETS + "sid = 'https://docs.google.com/spreadsheets/d/abc'\n"
+        self.assertEqual(self._gaps(self._step(
+            sheets, "connector", domains=["sheets.googleapis.com", "oauth2.googleapis.com"])), [])
+
+    def test_building_an_address_is_not_an_http_client(self):
+        quote = ("from urllib.parse import quote\n"
+                 "import urllib.parse\n"
+                 "from urllib import parse\n"
+                 "write_output('html', quote('a b'))\n")
+        self.assertEqual(self._gaps(self._step(self.LAUNCH + quote, "browser")), [])
+        self.assertTrue(self._gaps(self._step(self.LAUNCH + "import requests\n", "browser")))
+
     def test_the_save_never_changes_a_declared_type(self):
         import json
         from agent import node_tools
@@ -1192,6 +1305,72 @@ class OneKindOfWorkTest(unittest.TestCase):
         step = (p.get("plan") or {}).get("nodes", [{}])[0]
         self.assertEqual(step.get("type"), "connector", res)
         self.assertIn('set its type to \\"browser\\"', json.dumps(res))
+
+class AConditionAnotherLineBypassesTest(unittest.TestCase):
+    def _gaps(self, edges):
+        names = {e[k] for e in edges for k in ("src", "dst")}
+        nodes = [_code(n, outputs=[f"o_{n}"]) for n in sorted(names)]
+        r = plan_logic.check(_proj(), _plan(nodes, edges))
+        return [f for f in r["findings"] if "decides nothing" in f]
+
+    def test_the_google_travel_shape_is_a_gap(self):
+        gaps = self._gaps([
+            {"src": "Search", "dst": "Prepare"},
+            {"src": "Prepare", "dst": "Write", "when": "status == 'has_data'"},
+            {"src": "Extract id", "dst": "Write"},
+            {"src": "Write", "dst": "Report"}, {"src": "Prepare", "dst": "Report"}])
+        self.assertEqual(len(gaps), 1, gaps)
+        self.assertIn('"Write"', gaps[0])
+        self.assertIn('"Extract id"', gaps[0])
+
+    def test_a_merge_after_a_branch_is_not_a_gap(self):
+        self.assertEqual(self._gaps([
+            {"src": "A", "dst": "Merge", "when": "x"},
+            {"src": "A", "dst": "B", "when": "not x"},
+            {"src": "B", "dst": "Merge"}]), [])
+
+class AnInputFromAStepThatMayNotRunTest(unittest.TestCase):
+    def _step(self, name, inputs=(), outputs=(), optional=()):
+        return {"name": name, "type": "code", "code_sketch": "x",
+                "inputs": [{"name": i, "type": "text", **({"optional": True} if i in optional else {})}
+                           for i in inputs],
+                "outputs": [{"name": o, "type": "text"} for o in outputs]}
+
+    def _gaps(self, nodes, edges, variables=()):
+        r = plan_logic.check(_proj(variables=[{"name": v, "value": "x", "persistent": True}
+                                              for v in variables]), _plan(nodes, edges))
+        return [f for f in r["findings"] if "does not run" in f]
+
+    HOTEL = [("Search", "Prices", "found"), ("Search", "Message", ""), ("Prices", "Message", "")]
+
+    def _hotel(self, optional=(), variables=()):
+        nodes = [self._step("Search", outputs=["found"]),
+                 self._step("Prices", inputs=["found"], outputs=["prices"]),
+                 self._step("Message", inputs=["found", "prices"], outputs=["message"],
+                            optional=optional)]
+        edges = [{"src": s, "dst": d, **({"when": w} if w else {})} for s, d, w in self.HOTEL]
+        return self._gaps(nodes, edges, variables)
+
+    def test_the_bench_shape_is_a_gap(self):
+        gaps = self._hotel()
+        self.assertEqual(len(gaps), 1, gaps)
+        self.assertIn('"Message" reads "prices" from "Prices"', gaps[0])
+
+    def test_an_optional_input_or_a_stored_value_is_not(self):
+        self.assertEqual(self._hotel(optional=["prices"]), [])
+        self.assertEqual(self._hotel(variables=["prices"]), [])
+
+    def test_two_starts_and_two_branches_are_not(self):
+        starts = [self._step("A", outputs=["a"]), self._step("B", outputs=["b"]),
+                  self._step("C", inputs=["a", "b"], outputs=["c"])]
+        self.assertEqual(self._gaps(starts, [{"src": "A", "dst": "C"}, {"src": "B", "dst": "C"}]), [])
+        branches = [self._step("S", outputs=["s"]),
+                    self._step("L", inputs=["s"], outputs=["v"]),
+                    self._step("R", inputs=["s"], outputs=["v"]),
+                    self._step("M", inputs=["v"], outputs=["m"])]
+        self.assertEqual(self._gaps(branches, [{"src": "S", "dst": "L", "when": "s == 'a'"},
+                                               {"src": "S", "dst": "R", "when": "s != 'a'"},
+                                               {"src": "L", "dst": "M"}, {"src": "R", "dst": "M"}]), [])
 
 class EveryStepHasALineTest(unittest.TestCase):
     def test_a_plan_with_steps_and_no_lines_is_a_gap_and_one_step_is_not(self):

@@ -263,6 +263,86 @@ def literal_item_caps(code: str) -> list[tuple[str, int]]:
                 found.append((name, int(node.args[1].value)))
     return found
 
+_CLOCK_CALLS = {"monotonic", "time", "perf_counter"}
+
+# A collecting loop that ends on a number written into the code, as (kind, number, line) where kind is "rounds" or "seconds"
+def fixed_loop_bounds(code: str) -> list[tuple[str, float, int]]:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+
+    def number(expr):
+        return (isinstance(expr, ast.Constant) and isinstance(expr.value, (int, float))
+                and not isinstance(expr.value, bool))
+
+    def clock_call(expr):
+        return any(isinstance(c, ast.Call) and (
+                   (isinstance(c.func, ast.Attribute) and c.func.attr in _CLOCK_CALLS
+                    and isinstance(c.func.value, ast.Name) and c.func.value.id == "time")
+                   or (isinstance(c.func, ast.Name) and c.func.id in ("monotonic", "perf_counter")))
+                   for c in ast.walk(expr))
+
+    numbers: dict[str, float] = {}
+    deadlines: dict[str, float] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            nm = node.targets[0].id
+            if number(node.value):
+                numbers[nm] = float(node.value.value)
+            elif clock_call(node.value):
+                lits = [c.value for c in ast.walk(node.value) if number(c)]
+                if lits:
+                    deadlines[nm] = float(lits[-1])
+
+    def own_breaks(body):
+        out = []
+
+        def walk(stmts, in_try):
+            for s in stmts:
+                if isinstance(s, ast.Break):
+                    if not in_try:
+                        out.append(s)
+                elif isinstance(s, (ast.For, ast.While, ast.AsyncFor,
+                                    ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                elif isinstance(s, ast.Try):
+                    walk(s.body, True)
+                    for h in s.handlers:
+                        walk(h.body, in_try)
+                    walk(s.orelse, in_try)
+                    walk(s.finalbody, in_try)
+                else:
+                    for field in ("body", "orelse"):
+                        walk(getattr(s, field, []) or [], in_try)
+        walk(body, False)
+        return out
+
+    found: list[tuple[str, float, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Call) \
+                and isinstance(node.iter.func, ast.Name) and node.iter.func.id == "range" \
+                and node.iter.args and len(node.iter.args) <= 2:
+            stop = node.iter.args[-1]
+            if number(stop) and own_breaks(node.body):
+                found.append(("rounds", float(stop.value), node.lineno))
+        elif isinstance(node, ast.Compare) and len(node.comparators) == 1:
+            left, right = node.left, node.comparators[0]
+            for a, b in ((left, right), (right, left)):
+                if not clock_call(a):
+                    continue
+                if number(b):
+                    found.append(("seconds", float(b.value), node.lineno))
+                    break
+                if isinstance(b, ast.Name) and b.id in numbers:
+                    found.append(("seconds", numbers[b.id], node.lineno))
+                    break
+                if isinstance(b, ast.Name) and b.id in deadlines:
+                    found.append(("seconds", deadlines[b.id], node.lineno))
+                    break
+    return found
+
 # The output names the code actually writes, so declared ports and written names can be reconciled
 def write_output_names(code: str) -> tuple[set, bool]:
     try:
@@ -368,6 +448,8 @@ _NETWORK_ROOTS = frozenset((
     "msal", "O365", "exchangelib", "praw", "tweepy", "stripe", "openai",
     "anthropic", "notion_client", "pyairtable", "psycopg2", "pymysql",
     "sqlalchemy", "pymongo", "redis", "paramiko"))
+
+_NOT_NETWORK = frozenset(("urllib.parse", "http.cookies", "http.HTTPStatus"))
 _URL_RE = re.compile(r"https?://([A-Za-z0-9.-]+)")
 
 _SECOND_LEVEL = frozenset(("co", "com", "org", "net", "ac", "gov", "edu"))
@@ -393,10 +475,13 @@ def work_signature(code: str) -> dict:
         return sig
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
-            if any(_module_root(a.name) in _NETWORK_ROOTS for a in n.names):
+            if any(_module_root(a.name) in _NETWORK_ROOTS and a.name not in _NOT_NETWORK
+                   for a in n.names):
                 sig["http_client"] = True
         elif isinstance(n, ast.ImportFrom):
-            if _module_root(n.module) in _NETWORK_ROOTS:
+            full = {f"{n.module}.{a.name}" for a in n.names}
+            if _module_root(n.module) in _NETWORK_ROOTS and n.module not in _NOT_NETWORK \
+                    and not full <= _NOT_NETWORK:
                 sig["http_client"] = True
         elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
             if n.func.id == "ai_call":

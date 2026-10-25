@@ -46,8 +46,8 @@ class CellCall:
 
         self.notes: list = []
         if not self.code.strip() and self.step is not None:
-            self.code = (str((self.plan_step or {}).get("code") or "").strip()
-                         or str((self.prior or {}).get("code") or "").strip()
+            self.code = (str((self.prior or {}).get("code") or "").strip()
+                         or str((self.plan_step or {}).get("code") or "").strip()
                          or str(((self.step.get("config") or {}).get("code")) or "").strip())
             self.code_from_step = bool(self.code)
             if self.code_from_step:
@@ -496,6 +496,12 @@ def execute(c: CellCall) -> dict:
                 if hint:
                     result["note"] = hint
 
+                empty = [pr.get("port") for pr in problems if pr.get("empty_output")]
+                if empty:
+                    result["note"] = (
+                        "an output that had items in an earlier try came back empty: if an empty list is a normal result for this step (nothing was found), set may_be_empty: true on that output in the plan ("
+                        + ", ".join(str(e) for e in empty) + ") and try again; otherwise the step is not reading the list")
+
         if c.is_browser:
             from agent import cells as _cells
             kept = sorted(_cells.capture_refs(out))
@@ -550,14 +556,15 @@ def execute(c: CellCall) -> dict:
             result["captured_note"] = (
                 f"this was window {num}" + (f" ({c.reason})" if c.reason else "")
                 + ". Read its recordings with \"$recorded:har#" + str(num) + "\", "
-                f"\"$recorded:page#{num}\" and \"$recorded:calls#{num}\", and compare "
+                f"\"$recorded:page#{num}\", \"$recorded:text#{num}\" and "
+                f"\"$recorded:calls#{num}\", and compare "
                 "them with earlier windows' before opening the page again.")
         else:
             result["captured_note"] = (
                 f"this was window {num}" + (f" ({c.reason})" if c.reason else "")
                 + ". It kept " + ", ".join(result["captured"]) + ". Read any of "
                 f"them in the next cell with \"$recorded:<name>#{num}\" "
-                "(\"$recorded:<name>\" is always the newest window); read_input returns the recording already parsed, and read_input(name, path=True) gives a file path when a library wants one - the traffic (har) holds every request and response, the page (page) is the document as the window left it, and the listing (calls) is one line per call with its id; the listing on this result is folded (repeats of one address in one row, other kinds as counts), and read_input(\"calls\", kind=\"image\") or ids=[...] unfolds any row in full (url=, status=, method= filter the same way, on har too). Every earlier window's recording stays readable by its number until the build is done, so compare them before opening the page again.")
+                "(\"$recorded:<name>\" is always the newest window); read_input returns the recording already parsed, and read_input(name, path=True) gives a file path when a library wants one - the traffic (har) holds every request and response, the page (page) is the document as the window left it, its text (text) is the words a person sees in the order they read them, what select-all and copy gives, and the listing (calls) is one line per call with its id; the listing on this result is folded (repeats of one address in one row, other kinds as counts), and read_input(\"calls\", kind=\"image\") or ids=[...] unfolds any row in full (url=, status=, method= filter the same way, on har too). Every earlier window's recording stays readable by its number until the build is done, so compare them before opening the page again.")
     result.update({"cell": name, "runs": n, "seconds": round(_time.time() - t0, 1)})
     if ok:
         if c.prior and c.code_key(c.prior.get("code")) != c.code_key():

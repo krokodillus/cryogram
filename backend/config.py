@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 # Versions compare as integer tuples so 0.4.10 sorts after 0.4.9; unparseable input compares lowest
 def version_tuple(v) -> tuple:

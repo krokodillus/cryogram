@@ -4,8 +4,8 @@ description: WHEN a step reads or writes a Google Sheet: how to choose between a
 tier: 2
 kind: action
 depends_on: []
-version: 2.0.0
-last_updated: 2026-10-13
+version: 2.2.0
+last_updated: 2026-10-25
 ---
 
 # Connecting to Google Sheets
@@ -13,6 +13,8 @@ last_updated: 2026-10-13
 Use a connection that already exists, or the route the user chose. Compare routes only when more than one of them works and they really differ in setup, in what the step can do, or in how much of the user's data they share. Do not make the user choose between all three routes for every Sheets task.
 
 First check the environments attached to the workflow for a Google service-account key. If one is there, offer Route 2 with it first, and do not walk the user through Apps Script setup while a working key sits unused. If there is none, always tell the user about the reuse option when you offer the choice: a user who will build more Google automations, or who already has a service account, sets it up once, saves the JSON key in an environment, and every later workflow uses it without entering it again. Recommending Apps Script for a one-off is still right, but always mention the reuse option.
+
+On every route, the sheet's link and its tab are settings the step reads with `read_input`, so the user can point the workflow at another sheet later without changing it. The step takes the sheet's id from the link. When the user named no tab, the step reads the name of the sheet's first tab from the sheet itself, and never has a tab name such as "Sheet1" written into its code.
 
 ## Route 1: an Apps Script web app, recommended for writes at small scale
 
@@ -36,6 +38,8 @@ What goes wrong, to check before you debug anything else:
 This is the official API. It gives structured errors and has no redirect problems. The user must create a Google Cloud project (or use the one they made for another workflow), enable the Sheets API, create a service-account key (a JSON file, stored as a secret), and share the sheet with the service account's email address. Use it when the workflow is business-critical or needs both reads and writes. It is a lot of setup for a casual sheet, but it can be reused: once the key is in an environment, every later Google workflow uses it with no setup.
 
 A service account has no storage quota in a personal My Drive, so it cannot create files there: use a sheet the user already owns and share it with the service account as Editor. This does not mean a service account can never create a file. In a Workspace shared drive that the account has permission for, it can create files that the shared drive owns. Before you offer that route, check the destination and the API call that creates the file. If you get a 403, work out the cause from the actual response, and do not assume it is always the quota.
+
+When you ask the user for the sheet's link on this route, give them the service account's email address in the same question and ask them to share the sheet with it as Editor, so the first real write does not fail with a permission error. Read the address from the environment's setting for it in a try before you ask.
 
 Nobody can read the service account's email address out of the stored key: not the user (a secret is never shown again) and not you (the value exists only inside a running step). During setup, while the user still has the JSON file, save the email address as its own setting that is not a secret. If a key is already stored with no such setting, the email address is shown, without the file, at https://console.cloud.google.com/iam-admin/serviceaccounts. Ask the user to read it there, then save it yourself, so it is never asked again.
 

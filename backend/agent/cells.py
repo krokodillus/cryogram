@@ -132,8 +132,9 @@ def trim_captures(workflow_id: str, keep: int = CAPTURES_KEPT) -> int:
         return 0
 
     def refs(cap):
-        out = [cap.get("har"), cap.get("snapshot"), cap.get("calls_file")]
-        out += [pg.get("ref") for pg in cap.get("pages") or [] if isinstance(pg, dict)]
+        out = [cap.get("har"), cap.get("snapshot"), cap.get("calls_file"), cap.get("text")]
+        out += [pg.get(k) for pg in cap.get("pages") or [] if isinstance(pg, dict)
+                for k in ("ref", "text_ref")]
         return {r for r in out if isinstance(r, str) and r}
     held = set()
     for _ts, cap in with_caps[:keep]:
@@ -222,6 +223,7 @@ def capture_refs(output: Any) -> dict:
     out = {}
     for name, ref in (("har", cap.get("har")),
                       ("page", cap.get("snapshot")),
+                      ("text", cap.get("text")),
                       ("calls", cap.get("calls_file"))):
         if isinstance(ref, str) and ref and _bs.exists(ref):
             out[name] = ref
@@ -262,9 +264,9 @@ def capture_held(workflow_id: str) -> list[tuple]:
         cap = cap.get("$capture") if isinstance(cap.get("$capture"), dict) else None
         if not isinstance(cap, dict):
             continue
-        refs = [cap.get("har"), cap.get("snapshot"), cap.get("calls_file")]
-        refs += [pg.get("ref") for pg in cap.get("pages") or []
-                 if isinstance(pg, dict)]
+        refs = [cap.get("har"), cap.get("snapshot"), cap.get("calls_file"), cap.get("text")]
+        refs += [pg.get(k) for pg in cap.get("pages") or [] if isinstance(pg, dict)
+                 for k in ("ref", "text_ref")]
         for ref in refs:
             if isinstance(ref, str) and ref:
                 seen.append((r.get("name") or "", ref))

@@ -208,6 +208,15 @@ def settle(workflow: dict, req: dict, got, at_rest: bool = False) -> dict:
                 grant.update({"kind": payload["holds"], "always": True,
                               **({"domain": payload["domain"]} if payload.get("domain") else {})})
             grants.append(grant)
+    count = payload.get("count")
+    if isinstance(count, dict) and count.get("step"):
+        kept = ("list-count" if clicked and text == count.get("yes")
+                else "list-count-no" if clicked and text == count.get("no")
+                else "list-count-said")
+        workflow.setdefault("approval_grants", []).append(
+            {"kind": kept, "step": count["step"], "count": count.get("found"),
+             **({"said": text} if kept == "list-count-said" else {}),
+             "ts": time.time()})
     drive = driving_text(req, "(provided)" if secret and clicked else text, shown)
     transcript.append_answer(workflow, iid, drive, shown=shown, cid=cid)
     return {"drive": drive, "shown": shown, "clicked": clicked, "text": text}

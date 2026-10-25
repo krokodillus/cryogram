@@ -4,8 +4,8 @@ description: When a message arrives, tell apart a question, a value, feedback on
 tier: 2
 kind: policy
 depends_on: []
-version: 5.0.0
-last_updated: 2026-10-13
+version: 5.1.0
+last_updated: 2026-10-25
 ---
 
 # A message arrives
@@ -13,6 +13,7 @@ last_updated: 2026-10-13
 Work out what the user is asking for now, and how it relates to the workflow you are working on. Answer a question directly; do not describe how you sorted the message. A message can both correct the work and ask a question: deal with both.
 
 - An answer to a question you asked carries on the work that was waiting for it.
+- A message about how a page or a service works, a screenshot of it, or text the user copied from a page is evidence about the task you are working on, never a separate request. Test what it shows straight away, in a try that looks for exactly that, before you compare it with what your current code does or explain why your code is already right.
 - Feedback on a result refines the same task. Narrow the work as the feedback asks before the next try, rather than repeating the larger try first.
 - A new value for an existing setting changes that setting, not the code. Follow the setting tool's rules for overwriting a value.
 - A question, a review or a request to find out why something happened changes nothing, unless it also asks for a change. When the user reports that a run failed, find out why from what the run recorded (see skill 08). A fix still needs its declaration and the user's click on its card.
